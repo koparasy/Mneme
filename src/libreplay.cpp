@@ -45,9 +45,6 @@
 #include "replay_opt.hpp"
 #endif
 
-cudaError_t cudaFuncGetParamInfo(const void *func, size_t paramIndex,
-                                 size_t *paramOffset, size_t *paramSize);
-
 // Overloaded functions
 static PREFIX(Error_t) (*deviceLaunchKernelInternal)(
     const void *func, dim3 gridDim, dim3 blockDim, void **args,
@@ -558,18 +555,6 @@ PREFIX(LaunchKernel)
   Wrapper *W = Wrapper::instance();
   static std::size_t kernel_counter{0};
   PREFIX(Error_t) ret;
-
-  int counter = 0;
-  for (int i = 0; i < 5; i++) {
-    size_t offset, size;
-    auto ret = cudaFuncGetParamInfo(func, i, &offset, &size);
-    if (ret != PREFIX(Success)) {
-      std::cout << "Total arguments are " << i << "\n";
-      break;
-    }
-    std::cout << "Arg:" << i << " size: " << size << "offset : " << offset
-              << "\n";
-  }
 
 #if ENABLE_REPLAY_OPT
   auto PrintDims = [&](dim3 gridDim, dim3 blockDim) {
