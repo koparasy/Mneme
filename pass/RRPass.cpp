@@ -44,7 +44,9 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -53,6 +55,7 @@
 
 #include <iostream>
 #include <string>
+#include <utility>
 
 using namespace llvm;
 
@@ -139,12 +142,26 @@ static void createRRModuleDevice(Module &M) {
   return;
 }
 
-void visitor(Module &M) {
-  if (!isDeviceCompilation(M)) {
-    dbgs() << "Not a device compilation exiting... \n";
-    return;
-  }
+StructType *getRecordReplayFuncDescTy(Module &M) {
+  Type *Int64Ty = Type::getInt64Ty(M.getContext());
+  return StructType::create({Int64Ty, PointerType::get(Int64Ty, 0)},
+                            "func_info");
+}
 
+std::string generateRecordReplayKernelName(StringRef Name) {
+  return "_record_replay_func_info_" + Name.str();
+}
+
+/* This function iterates over all functions in the module and detects which are
+ * "kernels" (a.k.a callable from host). For every kernel it creates a global
+ * variable that store the number of arguments of the kernel and the size (in
+ * bytes) of every argument
+ *
+ * Further, it creates a global variable that contains the LLVM IR of the module
+ * and the the size of the IR. On the host side we will read in these values to
+ * load the LLVM IR.
+ */
+void deviceInstrumentation(Module &M) {
   auto DeviceKernels = getDeviceKernels(M);
   auto DL = M.getDataLayout();
 
@@ -177,15 +194,33 @@ void visitor(Module &M) {
   // function. This will be read by the Record/Replay runtime library to infer
   // the sizes of the copies
   Type *Int64Ty = Type::getInt64Ty(M.getContext());
+  StructType *FunctionInfoTy = getRecordReplayFuncDescTy(M);
   for (auto KV : RRFunctionInfoMap) {
     if (KV.second.size() != 0) {
       ArrayType *RuntimeConstantArrayTy =
           ArrayType::get(Int64Ty, KV.second.size());
       Constant *CA = ConstantDataArray::get(M.getContext(), KV.second);
-      auto *GV = new GlobalVariable(M, RuntimeConstantArrayTy, true,
-                                    GlobalValue::PrivateLinkage, CA,
-                                    "_record_replay_" + KV.first->getName());
+      auto *Elements = new GlobalVariable(
+          M, RuntimeConstantArrayTy, true, GlobalValue::PrivateLinkage, CA,
+          "_record_replay_elements_" + KV.first->getName());
+
+      Constant *Index = ConstantInt::get(Int64Ty, 0, false);
+      Constant *GVPtr =
+          ConstantExpr::getGetElementPtr(Int64Ty, Elements, Index);
+      Constant *NumElems = ConstantInt::get(Int64Ty, KV.second.size(), false);
+      Constant *CS = ConstantStruct::get(FunctionInfoTy, {NumElems, GVPtr});
+      auto *GV = new GlobalVariable(
+          M, FunctionInfoTy, true, GlobalValue::PrivateLinkage, CS,
+          generateRecordReplayKernelName(KV.first->getName()));
       appendToUsed(M, {GV});
+    } else {
+      Constant *NumElems = ConstantInt::get(Int64Ty, KV.second.size(), false);
+      Constant *CS = ConstantStruct::get(
+          FunctionInfoTy,
+          {NumElems, ConstantPointerNull::get(PointerType::get(Int64Ty, 0))});
+      auto *GV = new GlobalVariable(
+          M, FunctionInfoTy, true, GlobalValue::PrivateLinkage, CS,
+          generateRecordReplayKernelName(KV.first->getName()));
     }
   }
 
@@ -202,8 +237,251 @@ void visitor(Module &M) {
       ArrayRef<uint8_t>((const uint8_t *)ModuleIR.data(), ModuleIR.size()));
   auto *GV = new GlobalVariable(M, IRModule->getType(), /* isConstant */ true,
                                 GlobalValue::PrivateLinkage, IRModule,
-                                "__record_replay_ir_module__");
-  appendToUsed(M, {GV});
+                                "_record_replay_ir_module_");
+
+  Type *Int8Ty = Type::getInt64Ty(M.getContext());
+  StructType *ModuleIRTy =
+      StructType::create({Int64Ty, PointerType::get(Int8Ty, 0)}, "module_info");
+
+  Constant *IRSize = ConstantInt::get(Int64Ty, ModuleIR.size(), false);
+
+  Constant *Index = ConstantInt::get(Int64Ty, 0, false);
+  Constant *IRPtr = ConstantExpr::getGetElementPtr(Int8Ty, GV, Index);
+
+  Constant *CS = ConstantStruct::get(ModuleIRTy, {IRSize, IRPtr});
+
+  // The '.' character results in weird ptxas behavior. We replace it.
+  std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
+  std::replace(IRName.begin(), IRName.end(), '.',
+               '_'); // replace all 'x' to 'y'
+
+  auto *GVIR = new GlobalVariable(M, ModuleIRTy, true,
+                                  GlobalValue::PrivateLinkage, CS, IRName);
+
+  appendToUsed(M, {GVIR});
+
+  errs() << "DEVICE MODULE: \n";
+  errs() << M << "\n";
+}
+
+static bool HasDeviceKernelCalls(Module &M) {
+#if ENABLE_HIP
+  Function *LaunchKernelFn = M.getFunction("hipLaunchKernel");
+#elif ENABLE_CUDA
+  Function *LaunchKernelFn = M.getFunction("cudaLaunchKernel");
+#endif
+  if (!LaunchKernelFn)
+    return false;
+
+  return true;
+}
+
+StringRef getGlobalString(GlobalVariable *GV) {
+  auto cInitializer = dyn_cast<ConstantDataArray>(GV->getInitializer());
+  if (cInitializer)
+    return cInitializer->getAsCString();
+  return StringRef("");
+}
+
+static std::pair<GlobalVariable *, GlobalVariable *>
+CreateGlobalVariable(Module &M, StringRef globalName) {
+  // Generate the global stub variable.
+  StructType *FunctionInfoTy = getRecordReplayFuncDescTy(M);
+
+  auto ASpace = M.getDataLayout().getDefaultGlobalsAddressSpace();
+  auto *GVStub = new GlobalVariable(
+      M, FunctionInfoTy, false /*isConstant=*/, GlobalValue::InternalLinkage,
+      UndefValue::get(FunctionInfoTy), globalName, nullptr,
+      llvm::GlobalValue::NotThreadLocal, ASpace);
+
+  GVStub->setAlignment(MaybeAlign(8));
+
+  // Generate the global variable storing the name of the global stub variable
+  Constant *VName = ConstantDataArray::get(
+      M.getContext(), ArrayRef<uint8_t>((const uint8_t *)globalName.data(),
+                                        globalName.size() + 1));
+  auto *GVName = new GlobalVariable(M, VName->getType(), /* isConstant */ true,
+                                    GlobalValue::InternalLinkage, VName);
+  GVName->setAlignment(MaybeAlign(1));
+
+  return std::make_pair(GVStub, GVName);
+}
+
+static void RegisterGlobalVariable(Module &M, Value *fatBinHandle,
+                                   Instruction *IP, StringRef globalName) {
+#if ENABLE_HIP
+#error pending implementation
+#elif ENABLE_CUDA
+  Function *RegisterVariable = M.getFunction("__cudaRegisterVar");
+#endif
+  auto dSize = M.getDataLayout().getTypeStoreSize(getRecordReplayFuncDescTy(M));
+  auto globals = CreateGlobalVariable(M, globalName);
+  IRBuilder<> Builder(IP);
+  Type *Int64Ty = Type::getInt64Ty(M.getContext());
+  Type *Int32Ty = Type::getInt32Ty(M.getContext());
+  Constant *Ext = ConstantInt::get(Int32Ty, 0, false);
+  Constant *Size = ConstantInt::get(Int64Ty, dSize, false);
+  Constant *Const = ConstantInt::get(Int32Ty, 0, false);
+  Constant *Global = ConstantInt::get(Int32Ty, 0, false);
+  FunctionCallee fnType(RegisterVariable);
+  Builder.CreateCall(fnType, {fatBinHandle, globals.first, globals.second,
+                              globals.second, Ext, Size, Const, Global});
+}
+
+static DenseMap<StringRef, std::pair<GlobalVariable *, GlobalVariable *>>
+InstantiateGlobalVariables(Module &M) {
+#if ENABLE_HIP
+  Function *RegisterFunction = M.getFunction("__hipRegisterFunction");
+  assert(false && "Pending implementation");
+#elif ENABLE_CUDA
+  Function *RegisterFunction = M.getFunction("__cudaRegisterFunction");
+#else
+#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
+#endif
+
+  DenseMap<StringRef, std::pair<GlobalVariable *, GlobalVariable *>>
+      KernelNameMap;
+  if (RegisterFunction) {
+    constexpr int KernelOperand = 2;
+    for (User *Usr : RegisterFunction->users())
+      if (CallBase *CB = dyn_cast<CallBase>(Usr)) {
+        GlobalVariable *GV =
+            dyn_cast<GlobalVariable>(CB->getArgOperand(KernelOperand));
+        assert(GV && "Expected global variable as kernel name operand");
+        auto cName = getGlobalString(GV);
+        assert(!cName.empty() && "Expected valid kernel stub key");
+        RegisterGlobalVariable(M, CB->getOperand(0),
+                               CB->getNextNonDebugInstruction(),
+                               generateRecordReplayKernelName(cName));
+      }
+  }
+
+  return KernelNameMap;
+}
+
+size_t getFatBinSize(Module &M, GlobalVariable *FatbinWrapper) {
+#if ENABLE_CUDA
+  ConstantStruct *C = dyn_cast<ConstantStruct>(FatbinWrapper->getInitializer());
+  assert(C->getType()->getNumElements() &&
+         "Expected four fields in fatbin wrapper struct");
+  constexpr int FatbinField = 2;
+  auto *Fatbin = C->getAggregateElement(FatbinField);
+  GlobalVariable *FatbinGV = dyn_cast<GlobalVariable>(Fatbin);
+  assert(FatbinGV && "Expected global variable for the fatbin object");
+  ArrayType *ArrayTy =
+      dyn_cast<ArrayType>(FatbinGV->getInitializer()->getType());
+  assert(ArrayTy && "Expected array type of the fatbin object");
+  assert(ArrayTy->getElementType() == Type::getInt8Ty(M.getContext()) &&
+         "Expected byte type for array type of the fatbin object");
+  size_t FatbinSize = ArrayTy->getNumElements();
+  return FatbinSize;
+#elif ENABLE_HIP
+  return 0;
+#else
+#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
+#endif
+}
+
+GlobalVariable *getFatBinWrapper(Module &M) {
+#if ENABLE_HIP
+  GlobalVariable *FatbinWrapper =
+      M.getGlobalVariable("__hip_fatbin_wrapper", true);
+#elif ENABLE_CUDA
+  GlobalVariable *FatbinWrapper =
+      M.getGlobalVariable("__cuda_fatbin_wrapper", true);
+#else
+#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
+#endif
+  return FatbinWrapper;
+}
+
+FunctionType *getRRRuntimeCallFnTy(Module &M) {
+  Type *voidTy = Type::getVoidTy(M.getContext());
+  Type *VoidPtrTy = Type::getInt8PtrTy(M.getContext());
+  Type *Int64Ty = Type::getInt64Ty(M.getContext());
+  FunctionType *RREntryFn =
+      FunctionType::get(voidTy, {VoidPtrTy, Int64Ty}, /*isVarArg=*/false);
+  return RREntryFn;
+}
+
+void RegisterFatBinary(Module &M) {
+#if ENABLE_HIP
+  assert(false && "Pending implementation");
+#elif ENABLE_CUDA
+  Function *RegisterFatBinaryFn = M.getFunction("__cudaRegisterFatBinary");
+#else
+#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
+#endif
+
+  if (RegisterFatBinaryFn) {
+    for (User *Usr : RegisterFatBinaryFn->users()) {
+      if (CallBase *CB = dyn_cast<CallBase>(Usr)) {
+        errs() << "CallBack\n";
+        errs() << *CB << "\n";
+        IRBuilder<> Builder(CB->getNextNonDebugInstruction());
+        auto *FatBin = getFatBinWrapper(M);
+        size_t FatBinSize = getFatBinSize(M, FatBin);
+        FunctionType *RRFnTy = getRRRuntimeCallFnTy(M);
+        FunctionCallee RRFn =
+            M.getOrInsertFunction("__rr_register_fat_binary", RRFnTy);
+        Builder.CreateCall(RRFn, {FatBin, Builder.getInt64(FatBinSize)});
+        // Once we insert a register we can break. There is a single
+        // registration per translation unit.
+        // TODO: Verify this in the case of multiple device files
+        break;
+      }
+    }
+  }
+}
+
+void RegisterLLVMIRVariable(Module &M) {
+#if ENABLE_HIP
+  assert(false && "Pending implementation");
+#elif ENABLE_CUDA
+  Function *RegisterFatBinaryFn = M.getFunction("__cudaRegisterFatBinary");
+#else
+#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
+#endif
+
+  if (RegisterFatBinaryFn) {
+    for (User *Usr : RegisterFatBinaryFn->users()) {
+      if (CallBase *CB = dyn_cast<CallBase>(Usr)) {
+        std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
+        // I need to do this, cause ptxas does not like '.' and we cannot find
+        // the respective symbols
+        std::replace(IRName.begin(), IRName.end(), '.',
+                     '_'); // replace all 'x' to 'y'
+        RegisterGlobalVariable(M, CB, CB->getNextNonDebugInstruction(), IRName);
+
+        break;
+      }
+    }
+  }
+}
+
+void hostInstrumentation(Module &M) {
+  if (!HasDeviceKernelCalls(M)) {
+    errs() << "Module " << M.getSourceFileName()
+           << " Does not have kernel functions\n";
+    return;
+  }
+  // We register all device globals so that we can access them.
+  auto KernelNameMap = InstantiateGlobalVariables(M);
+
+  RegisterLLVMIRVariable(M);
+  RegisterFatBinary(M);
+  errs() << M << "\n";
+
+  //
+}
+
+void visitor(Module &M) {
+  if (!isDeviceCompilation(M)) {
+    hostInstrumentation(M);
+    return;
+  }
+  deviceInstrumentation(M);
+  return;
 }
 
 // New PM implementation

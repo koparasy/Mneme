@@ -7,9 +7,10 @@ if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(RRPass PRIVATE -fno-rtti)
 endif()
 
-# Allow undefined symbols in shared objects on Darwin (this is the default
-# behaviour on Linux)
-target_link_libraries(RRPass
-  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
+llvm_map_components_to_libnames(llvm_libs all)
+
+message(WARNING "LIBS: ${llvm_libs}")
+
+target_link_libraries(RRPass PRIVATE ${llvm_libs})
 
 install(TARGETS RRPass)
