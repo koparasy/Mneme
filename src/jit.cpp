@@ -23,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/Passes/OptimizationLevel.h>
@@ -176,7 +177,6 @@ Expected<llvm::orc::ThreadSafeModule> loadIR(StringRef FileName) {
   SMDiagnostic Err;
   auto Ctx = std::make_unique<LLVMContext>();
   if (auto M = parseIRFile(FileName, Err, *Ctx)) {
-    errs() << *M.get() << "\n";
     return llvm::orc::ThreadSafeModule(std::move(M), std::move(Ctx));
   }
   return createSMDiagnosticError(Err);
@@ -208,7 +208,7 @@ void IRToBackEnd(Module &M, std::string &CudaArch,
   PTXStr.push_back('\0');
 }
 
-void CreateObject(StringRef &PTX, CUmodule &CUMod) {
+void CreateDeviceObject(StringRef &PTX, CUmodule &CUMod) {
   char out[1024 * 1024];
   char err[1024 * 1024];
   CUjit_option array[5] = {CU_JIT_INFO_LOG_BUFFER,
@@ -216,23 +216,40 @@ void CreateObject(StringRef &PTX, CUmodule &CUMod) {
                            CU_JIT_ERROR_LOG_BUFFER, CU_JIT_LOG_VERBOSE,
                            CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES};
   int64_t values[5] = {(int64_t)out, 1024 * 1024, (int64_t)err, 1, 1024 * 1024};
-  cuModuleLoadDataEx(&CUMod, PTX.data(), 5, array, (void **)&values);
+  int numOptions = 0;
+#ifdef __ENABLE_DEBUG__
+  numOptions = 5;
+#endif // __ENABLE_DEBUG__
+  // TODO: This is not good for debug runs, cuErrCheck will terminate in case of
+  // an error before we output the logged errors.
+  cuErrCheck(
+      cuModuleLoadDataEx(&CUMod, PTX.data(), 0, array, (void **)&values));
 
+#ifdef __ENABLE_DEBUG__
   std::cout << "STDOUT\n";
   std::cout << out << "\n";
   std::cout << "STDERR\n";
   std::cout << err << "\n";
+#endif // __ENABLE_DEBUG__
   return;
 }
 
-void launchFunction(CUmodule CUMod, std::string KernelName, dim3 GridDim,
+void GetDeviceFunction(CUfunction &CUFunc, CUmodule &CUMod,
+                       StringRef FunctionName) {
+  cuErrCheck(cuModuleGetFunction(&CUFunc, CUMod, FunctionName.data()));
+}
+
+void LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
                     dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs) {
-  CUfunction CUFunc;
-  cuErrCheck(cuModuleGetFunction(&CUFunc, CUMod, KernelName.c_str()));
+  std::cout << "Launching with Grid (" << GridDim.x << "," << GridDim.y << ","
+            << GridDim.z << ")\n";
+  std::cout << "Launching with Block(" << BlockDim.x << "," << BlockDim.y << ","
+            << BlockDim.z << ")\n";
 
   cuErrCheck(cuLaunchKernel(CUFunc, GridDim.x, GridDim.y, GridDim.z, BlockDim.x,
                             BlockDim.y, BlockDim.z, ShMemSize, nullptr,
                             KernelArgs, nullptr));
+  cudaErrCheck(cudaDeviceSynchronize());
 }
 } // namespace cuda
 } // namespace jit

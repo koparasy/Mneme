@@ -1,3 +1,5 @@
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <cstdint>
 #include <cstring>
@@ -53,15 +55,42 @@ public:
               << " Copied: " << Copied << "\n";
   }
 
+  void AllocateDevice() {
+    cudaErrCheck(cudaMalloc(&DevPtr, MemSize));
+    Mapped = false;
+  }
+
   void MemMapToDevice(void *req_addr) {
     // TODO: We currently ignore the address, this can result in weird issues
     // later on
-    MemHandle = memory::cuda::MemMapToDevice(&DevPtr, nullptr, MemSize,
+    MemHandle = memory::cuda::MemMapToDevice(&DevPtr, req_addr, MemSize,
                                              MappedMemSize, 0);
     std::cout << "SUCCESS:: " << DevPtr << " Req Size: " << MemSize
               << " Provided : " << MappedMemSize << "\n";
+    if (req_addr != DevPtr) {
+      std::cerr << "Requested " << req_addr << " But got " << DevPtr << "\n";
+      report_fatal_error("Error Address does not match record run\n");
+    }
     Mapped = true;
     return;
+  }
+
+  void copyToDevice() {
+    cudaErrCheck(cudaMemcpy(DevPtr, HostPtr, MemSize, cudaMemcpyHostToDevice));
+    Copied = true;
+  }
+
+  void copyFromDevice() {
+    cudaErrCheck(cudaMemcpy(HostPtr, DevPtr, MemSize, cudaMemcpyDeviceToHost));
+  }
+
+  bool compare(MemoryBlob &blob) {
+    if (MemSize != blob.MemSize)
+      return false;
+
+    uint8_t *ptr1 = (uint8_t *)HostPtr;
+    uint8_t *ptr2 = (uint8_t *)blob.HostPtr;
+    return std::memcmp(ptr1, ptr2, MemSize) == 0;
   }
 
   ~MemoryBlob() {
@@ -77,7 +106,7 @@ public:
   }
 };
 
-class BinarySnapshot {
+struct BinarySnapshot {
   uint8_t **args;
   uint64_t num_args;
   std::vector<uint64_t> arg_size;
@@ -147,6 +176,11 @@ public:
       std::cout << "Argument Size: " << I << "\n";
     }
 
+    for (int i = 0; i < num_args; i++) {
+      std::cout << "Argument :" << i
+                << " Addr:" << (void *)(*(uint64_t *)args[i]) << "\n";
+    }
+
     for (auto &KV : DeviceBlobs) {
       std::cout << "Information About Device Memory at Address: "
                 << (void *)KV.first << "\n";
@@ -154,10 +188,42 @@ public:
     }
   }
 
-  void MemMapToDevice() {
-    for (auto &KV : DeviceBlobs) {
-      KV.second.MemMapToDevice((void *)KV.first);
+  void AllocateDevice(bool Map = true) {
+    if (Map) {
+      for (auto &KV : DeviceBlobs) {
+        KV.second.MemMapToDevice((void *)KV.first);
+      }
+    } else {
+      for (auto &KV : DeviceBlobs) {
+        KV.second.AllocateDevice();
+      }
     }
+  }
+
+  void copyToDevice() {
+    for (auto &KV : DeviceBlobs) {
+      KV.second.copyToDevice();
+    }
+  }
+
+  void copyFromDevice() {
+    for (auto &KV : DeviceBlobs) {
+      KV.second.copyFromDevice();
+    }
+  }
+
+  /* Returns true when blobs are the same */
+  bool compare(BinarySnapshot &other) {
+    for (auto &KV : DeviceBlobs) {
+      uint64_t devAddr = KV.first;
+      auto otherEntry = other.DeviceBlobs.find(devAddr);
+      if (otherEntry == other.DeviceBlobs.end())
+        return false;
+
+      if (!KV.second.compare(otherEntry->second))
+        return false;
+    }
+    return true;
   }
 };
 
@@ -186,11 +252,21 @@ std::pair<std::string, CUdevice> init() {
   return std::make_pair(CudaArch, CUDev);
 }
 
+dim3 getDim3(json::Object &Info, std::string key) {
+  auto JObject = Info.getObject(key);
+  long x = *JObject->getInteger("x");
+  long y = *JObject->getInteger("y");
+  long z = *JObject->getInteger("z");
+  return dim3(x, y, z);
+}
+
 int main(int argc, char *argv[]) {
-  if (argc < 4) {
-    std::cout << "Wrong CLI, expecting:" << argv[0]
+  if (argc < 5) {
+    std::cerr << "Wrong CLI, expecting:" << argv[0]
               << "'Path to IR file' 'Path to device memory before running "
-                 "kernel' 'Path to device memory after running kernel";
+                 "kernel' 'Path to device memory after running kernel' 'File "
+                 "Name containing kernel description'";
+    exit(-1);
   }
 
   auto DeviceSpec = init();
@@ -199,17 +275,32 @@ int main(int argc, char *argv[]) {
   std::string IRFn(argv[1]);
   std::string iDeviceMemory(argv[2]);
   std::string oDeviceMemory(argv[3]);
+  std::string JSONFileName(argv[4]);
+
+  ErrorOr<std::unique_ptr<MemoryBuffer>> KernelInfoMB =
+      MemoryBuffer::getFile(JSONFileName, /* isText */ true,
+                            /* RequiresNullTerminator */ true);
+
+  Expected<json::Value> JsonKernelInfo =
+      json::parse(KernelInfoMB.get()->getBuffer());
+  if (auto Err = JsonKernelInfo.takeError())
+    report_fatal_error("Cannot parse the kernel info json file");
+
+  StringRef KernelName = *JsonKernelInfo->getAsObject()->getString("Name");
+  dim3 gridDim = getDim3(*JsonKernelInfo->getAsObject(), "Grid");
+  dim3 blockDim = getDim3(*JsonKernelInfo->getAsObject(), "Block");
+  size_t SharedMem = *JsonKernelInfo->getAsObject()->getInteger("SharedMemory");
 
   // Load Kernel Input
   BinarySnapshot input = BinarySnapshot::Load(iDeviceMemory);
-  input.MemMapToDevice();
+  BinarySnapshot output = BinarySnapshot::Load(oDeviceMemory);
+  input.AllocateDevice(true);
 
   // Load IR
   InitJITEngine();
   auto TIR = loadIR(IRFn);
-  if (auto E = TIR.takeError()) {
-    std::cout << "ERROR\n";
-  }
+  if (auto E = TIR.takeError())
+    report_fatal_error("Could Not load llvm IR");
 
   auto &M = *TIR.get().getModuleUnlocked();
 
@@ -218,9 +309,8 @@ int main(int argc, char *argv[]) {
   SmallVector<char, 4096> PTXStr;
   IRToBackEnd(M, DeviceArch, PTXStr);
   StringRef PTX(PTXStr.data(), PTXStr.size());
-  std::cout << PTX.str().size() << "\n";
-  std::cout << DeviceArch << "\n";
 
+#ifdef __ENABLE_DEBUG__
   std::error_code EC;
   std::string rrBC("ptx-ir.s");
   raw_fd_ostream OutBC(rrBC, EC);
@@ -228,7 +318,30 @@ int main(int argc, char *argv[]) {
     throw std::runtime_error("Cannot open device code " + rrBC);
   OutBC << PTX.str();
   OutBC.close();
+#endif
 
+  // Lower to device and get function
   CUmodule DevModule;
-  CreateObject(PTX, DevModule);
+  CUfunction DevFunction;
+  CreateDeviceObject(PTX, DevModule);
+  GetDeviceFunction(DevFunction, DevModule, KernelName);
+  std::cout << "Launching\n";
+  input.copyToDevice();
+  input.dump();
+
+  // Execute Device
+  LaunchFunction(DevModule, DevFunction, gridDim, blockDim, SharedMem,
+                 (void **)input.args);
+  std::cout << "Done\n";
+
+  // Compare "input memory with output memory"
+
+  input.copyFromDevice();
+
+  if (input.compare(output)) {
+    std::cout << "Results match [Verified]";
+    return 0;
+  }
+  std::cout << "Results do not match [incorrect replay]";
+  return 1;
 }

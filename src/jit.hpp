@@ -15,13 +15,16 @@
 namespace jit {
 namespace cuda {
 #ifdef ENABLE_CUDA
-void launchFunction(CUmodule CUMod, std::string KernelName, dim3 GridDim,
+void LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
                     dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs);
 
 void IRToBackEnd(llvm::Module &M, std::string &CudaArch,
                  llvm::SmallVectorImpl<char> &PTXStr);
 
-void CreateObject(llvm::StringRef &PTX, CUmodule &CUMod);
+void CreateDeviceObject(llvm::StringRef &PTX, CUmodule &CUMod);
+
+void GetDeviceFunction(CUfunction &CUFunc, CUmodule &CUMod,
+                       llvm::StringRef FunctionName);
 
 void OptimizeIR(llvm::Module &M, unsigned int lvl, std::string &CudaArch);
 

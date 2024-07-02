@@ -1,4 +1,5 @@
 #include "memory.hpp"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -8,7 +9,11 @@
 #include <cxxabi.h>
 #include <dlfcn.h>
 #include <iostream>
+#include <llvm/Support/Error.h>
 #include <map>
+#include <sys/resource.h>
+#include <sys/time.h>
+
 #include <stdexcept>
 #include <stdint.h>
 #include <stdio.h>
@@ -397,10 +402,26 @@ void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
                                    gDim, wSize);
 }
 
+void *suggestAddr() {
+  // FIXME: This was a try and error approach. Getting a device address this way
+  // allows replay to obtain it again. Otherwise driver returns insignficant results
+  void *ptr;
+  cudaErrCheck(deviceMallocInternal(&ptr, 1024));
+  std::cout << "Allocated address " << ptr << "\n";
+  cudaErrCheck(deviceFreeInternal(ptr));
+  return ptr;
+}
+
 PREFIX(Error_t) PREFIX(Malloc)(void **ptr, size_t size) {
+  static void *initialAddr = nullptr;
+  if (!initialAddr)
+    initialAddr = suggestAddr();
+
   Wrapper *W = Wrapper::instance();
   size_t actual_size;
-  auto ret = memory::cuda::MemMapToDevice(ptr, nullptr, size, actual_size);
+  auto ret = memory::cuda::MemMapToDevice(ptr, initialAddr, size, actual_size);
+  initialAddr = *ptr;
+  initialAddr = (void *)((intptr_t)(initialAddr) + actual_size);
   W->devMemory[*ptr] = {actual_size, size, ret};
   return PREFIX(Success);
 }
@@ -451,6 +472,8 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args) {
     // raw_fd_ostream does not behave well when streaming other types
     // without specifying the size. I cast everything into a StringRef to be
     // explicit about the size of the bytes to be stored.
+    std::cout << "Argument " << i << " Address "
+              << (void *)(*(uint64_t *)(args[i])) << "\n";
     OutBC << StringRef(reinterpret_cast<const char *>(args[i]), info.h_ptr[i]);
   }
 
@@ -509,9 +532,27 @@ PREFIX(LaunchKernel)
 
   printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
          W->SymbolTable[func].first.c_str(), args, sharedMem);
-  int MaxThreadsPerBlock;
-  auto Dim =
-      blockDim.x * gridDim.x * blockDim.y * gridDim.y * blockDim.z * gridDim.z;
+
+  json::Object KernelInfo;
+  KernelInfo["Name"] = W->SymbolTable[func].first.c_str();
+  json::Object Grid, Block;
+  Grid["x"] = gridDim.x;
+  Grid["y"] = gridDim.y;
+  Grid["z"] = gridDim.z;
+
+  Block["x"] = blockDim.x;
+  Block["y"] = blockDim.y;
+  Block["z"] = blockDim.z;
+
+  KernelInfo["Grid"] = json::Value(std::move(Grid));
+  KernelInfo["Block"] = json::Value(std::move(Block));
+  KernelInfo["SharedMemory"] = sharedMem;
+
+  std::string JsonFilename = W->SymbolTable[func].first + ".json";
+  std::error_code EC;
+  raw_fd_ostream JsonOS(JsonFilename, EC);
+  JsonOS << json::Value(std::move(KernelInfo));
+  JsonOS.close();
 
   cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
                                           sharedMem, stream));

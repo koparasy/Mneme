@@ -77,14 +77,6 @@ CUmemGenericAllocationHandle MemMapToDevice(void **DevPtr, void *req_addr,
   cuErrCheck(cuMemAddressReserve(&devPtr, CeiledSize, Granularity,
                                  reinterpret_cast<CUdeviceptr>(req_addr), 0));
 
-  if (req_addr != nullptr and (void *) devPtr != req_addr) {
-    std::stringstream OS;
-    OS << "Memory Map: Could not provide requested address req_addr:"
-       << req_addr << " allocated:" << (void *)devPtr << "\n";
-
-    throw std::runtime_error(OS.str());
-  }
-
   cuErrCheck(cuMemMap(devPtr, CeiledSize, 0, AHandle, 0));
 
   CUmemAccessDesc ADesc = {};
@@ -95,7 +87,8 @@ CUmemGenericAllocationHandle MemMapToDevice(void **DevPtr, void *req_addr,
   // Sets address
   cuErrCheck(cuMemSetAccess(devPtr, CeiledSize, &ADesc, 1));
 
-  *DevPtr = reinterpret_cast<void *>(devPtr);
+  *DevPtr = (void *)(devPtr);
+  std::cout << "Device Address " << *DevPtr << "\n";
   return AHandle;
 }
 } // namespace cuda
