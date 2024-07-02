@@ -198,6 +198,20 @@ public:
     return hfuncData;
   }
 
+  /* TODO: We need to call loadRRGlobals once. The job of the loadRR is
+   * the following
+   * 1. Store into files the LLVM-IR so that these files are accessible.
+   * 2. Register to the wrapper the file names (those can be many, as we have a
+   * single file per translation unit.)
+   * 3. We need a correspondance of function to file and we need also a
+   * correspondance of the order of loading the IR files.
+   * 4. At the end the function needs to keep track of the following:
+   *    a. Name of global,
+   *    b. device address of global
+   *    c. Size of data of global.
+   *    These values should be serializable every time we call a kernel to a
+   * snapshot.
+   */
   void loadRRGlobals() {
     for (auto FB : FatBinaries) {
       CUmodule CUMod;
@@ -226,6 +240,8 @@ public:
           OutBC.close();
           llvmIR.dump();
         }
+        // Record replay specific instrumentation variables can removed from the
+        // map
       }
     }
   }
@@ -233,8 +249,6 @@ public:
   // GlobalsMap stores a mapping of host addr to size, will convert to device
   // pointers using <cuda|hip>GetSymbolAddress.
   std::unordered_map<std::string, size_t> GlobalsMap;
-  // DeviceMemoryMap holds all the pointers to device memory that need to be
-  // copied/restored.
   std::unordered_map<const void *, std::pair<std::string, std::string>>
       SymbolTable;
   std::vector<std::string> SymbolWhiteList;
@@ -404,7 +418,8 @@ void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
 
 void *suggestAddr() {
   // FIXME: This was a try and error approach. Getting a device address this way
-  // allows replay to obtain it again. Otherwise driver returns insignficant results
+  // allows replay to obtain it again. Otherwise driver returns insignficant
+  // results
   void *ptr;
   cudaErrCheck(deviceMallocInternal(&ptr, 1024));
   std::cout << "Allocated address " << ptr << "\n";
@@ -523,7 +538,6 @@ PREFIX(LaunchKernel)
   W->loadRRGlobals();
   std::string func_name = W->SymbolTable[func].first;
   func_name = "_record_replay_func_info_" + func_name;
-  std::cout << "Looking for func: " << func_name << "\n";
   auto func_info = W->ArgsInfo[func_name];
   func_info.dump(true);
   dumpDeviceMemory("KernelBefore.bin", func_info, args);
