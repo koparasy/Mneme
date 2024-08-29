@@ -252,8 +252,8 @@ void deviceInstrumentation(Module &M) {
 
   // The '.' character results in weird ptxas behavior. We replace it.
   std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
-  std::replace(IRName.begin(), IRName.end(), '.',
-               '_'); // replace all 'x' to 'y'
+  std::replace(IRName.begin(), IRName.end(), '.', '_');
+  std::replace(IRName.begin(), IRName.end(), '/', '_');
 
   auto *GVIR = new GlobalVariable(M, ModuleIRTy, true,
                                   GlobalValue::PrivateLinkage, CS, IRName);
@@ -451,6 +451,8 @@ void RegisterLLVMIRVariable(Module &M) {
         // the respective symbols
         std::replace(IRName.begin(), IRName.end(), '.',
                      '_'); // replace all 'x' to 'y'
+                           //
+        std::replace(IRName.begin(), IRName.end(), '/', '_');
         RegisterGlobalVariable(M, CB, CB->getNextNonDebugInstruction(), IRName);
 
         break;

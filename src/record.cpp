@@ -26,6 +26,8 @@
 #include <utility>
 #include <vector>
 
+#include <filesystem>
+
 #ifdef ENABLE_CUDA
 
 #include "common.hpp"
@@ -250,6 +252,7 @@ public:
                    std::string::npos) {
           ModuleName = std::regex_replace(
               GM->first, std::regex("_record_replay_descr_"), "");
+          std::cout << "Found record replay description\n";
           auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM->first);
           std::error_code EC;
           std::string rrBC(Twine(ModuleName, ".bc").str());
@@ -258,6 +261,7 @@ public:
             throw std::runtime_error("Cannot open device code " + rrBC);
           OutBC << StringRef(reinterpret_cast<const char *>(llvmIR.h_ptr),
                              llvmIR.elements);
+          std::cout << "Registered Record replay descr";
           OutBC.close();
           llvmIR.dump();
           // We erase here. This is not a global we would like to track
@@ -308,11 +312,17 @@ public:
   json::Object RecordedKernels;
   json::Object FuncsInModules;
 
+  const std::filesystem::path &getDataStoreDir() const {
+    return record_replay_dir;
+  }
+
 private:
   void *device_runtime_handle;
   int WarpSize;
   int MultiProcessorCount;
   int MaxGridSizeX;
+  std::string record_replay_fn;
+  std::filesystem::path record_replay_dir;
 
   Wrapper() {
 #ifdef ENABLE_CUDA
@@ -412,15 +422,32 @@ private:
         pos = endpos + 1;
       }
 #endif
+    auto env_rr_file = std::getenv("RR_FILE");
+    if (!env_rr_file) {
+      env_rr_file = (char *)"record_replay.json";
+    }
+
+    record_replay_fn = std::string(env_rr_file);
+
+    auto env_rr_data_directory = std::getenv("RR_DATA_DIR");
+    if (!env_rr_data_directory) {
+      env_rr_data_directory = (char *)"./";
+    }
+
+    record_replay_dir = std::string(env_rr_data_directory);
+    if (!std::filesystem::is_directory(record_replay_dir)) {
+      throw std::runtime_error("Path :" + record_replay_dir.string() +
+                               " does not exist.\n");
+    }
   }
 
   ~Wrapper() {
-    std::string JsonFilename = "recorded_data.json";
+    auto JsonFilename = record_replay_dir / record_replay_fn;
     std::error_code EC;
     json::Object record;
     record["kernels"] = json::Value(std::move(RecordedKernels));
     record["modules"] = json::Value(std::move(FuncsInModules));
-    raw_fd_ostream JsonOS(JsonFilename, EC);
+    raw_fd_ostream JsonOS(JsonFilename.string(), EC);
     JsonOS << json::Value(std::move(record));
     JsonOS.close();
   }
@@ -431,13 +458,13 @@ extern "C" {
 
 void PREFIX_UU(RegisterFatBinaryEnd)(void *ptr) {
   Wrapper *W = Wrapper::instance();
-  __deviceRegisterFatBinaryEndInternal(ptr);
-  return;
+  return __deviceRegisterFatBinaryEndInternal(ptr);
 }
 
-void **PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
+void *PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
   Wrapper *W = Wrapper::instance();
-  void **ret = __deviceRegisterFatBinaryInternal(fatCubin);
+  void *ret = __deviceRegisterFatBinaryInternal(fatCubin);
+  std::cout << "Intercepted fatbinary handle " << ret << "\n";
   return ret;
 }
 
@@ -575,7 +602,8 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
     OutBC << StringRef(reinterpret_cast<const char *>(GV.HostPtr), GV.Size);
 
     for (int i = 0; i < GV.Size; i++) {
-      std::cout << "Value at " << i
+      std::cout << "Global Value of " << GV.Name << " at address " << GV.DevPtr
+                << " at index " << i
                 << " is : " << (int)((int8_t *)GV.HostPtr)[i] << "\n";
     }
 
@@ -645,13 +673,12 @@ PREFIX(LaunchKernel)
   Block["y"] = blockDim.y;
   Block["z"] = blockDim.z;
 
-  std::string snapshotName(W->SymbolTable[func].first.c_str());
+  auto iDataFn = W->getDataStoreDir() /
+                 Twine("Before" + W->SymbolTable[func].first + ".bin").str();
 
-  dumpDeviceMemory(Twine("Before" + W->SymbolTable[func].first + ".bin").str(),
-                   func_info, args, W->TrackedGlobalVars);
+  dumpDeviceMemory(iDataFn.string(), func_info, args, W->TrackedGlobalVars);
   func_info.dump(true);
-  KernelInfo["InputData"] =
-      Twine("Before" + W->SymbolTable[func].first + ".bin").str();
+  KernelInfo["InputData"] = iDataFn.string();
 
   KernelInfo["Grid"] = json::Value(std::move(Grid));
   KernelInfo["Block"] = json::Value(std::move(Block));
@@ -664,11 +691,12 @@ PREFIX(LaunchKernel)
   // hesitant for this. Multi-stream execution can potentially modify the device
   // memory as we copy the data.
   PREFIX(DeviceSynchronize());
-  KernelInfo["OutputData"] =
-      Twine("After" + W->SymbolTable[func].first + ".bin").str();
+  auto oDataFn = W->getDataStoreDir() /
+                 Twine("After" + W->SymbolTable[func].first + ".bin").str();
+  KernelInfo["OutputData"] = oDataFn.string();
+
   func_info.dump(true);
-  dumpDeviceMemory(Twine("After" + W->SymbolTable[func].first + ".bin").str(),
-                   func_info, args, W->TrackedGlobalVars);
+  dumpDeviceMemory(oDataFn.string(), func_info, args, W->TrackedGlobalVars);
   func_info.dump(true);
   W->RecordedKernels[func_name] = std::move(KernelInfo);
 

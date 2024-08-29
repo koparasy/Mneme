@@ -218,7 +218,7 @@ public:
       KV.second.copyToDevice();
     }
     for (auto &KV : TrackedGlobalVars) {
-      std::cout << "COpying to global: " << KV.first << "\n";
+      std::cout << "Copying to global: " << KV.first << "\n";
       KV.second.copyToDevice();
     }
   }
@@ -234,7 +234,7 @@ public:
       KV.second.copyFromDevice();
     }
     for (auto &KV : TrackedGlobalVars) {
-      std::cout << "COpying back global: " << KV.first << "\n";
+      std::cout << "Copying back global: " << KV.first << "\n";
       KV.second.copyFromDevice();
     }
   }
@@ -256,12 +256,13 @@ public:
     }
 
     for (auto &KV : TrackedGlobalVars) {
-      std::cout << "Comparing global " << KV.first << "\n";
       auto otherEntry = other.TrackedGlobalVars.find(KV.first);
-      if (otherEntry == other.TrackedGlobalVars.end())
+      if (otherEntry == other.TrackedGlobalVars.end()) {
+        std::cout << "Cannot find the same symbol, globals differ \n";
         return false;
-      std::cout << "Comparing global pointers \n";
+      }
       if (!KV.second.compare(otherEntry->second)) {
+        std::cout << "Globals differ\n";
         return false;
       }
     }
