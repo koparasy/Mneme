@@ -1,6 +1,6 @@
 
 
-add_library(record SHARED record.cpp memory.cpp)
+add_library(record SHARED record.cpp memory.cpp common.cpp)
 
 set(libs ${LLVM_AVAILABLE_LIBS})
 
@@ -17,7 +17,7 @@ endif()
 message(WARNING "LIBS are ${libs}")
 target_link_libraries(record PRIVATE LLVM "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
 
-add_executable(replay replay.cpp memory.cpp jit.cpp)
+add_executable(replay replay.cpp memory.cpp jit.cpp common.cpp)
 target_include_directories(replay PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 target_include_directories(replay PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(replay PRIVATE LLVM CUDA::cudart CUDA::cuda_driver)

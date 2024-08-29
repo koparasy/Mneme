@@ -9,8 +9,10 @@
 #include <cxxabi.h>
 #include <dlfcn.h>
 #include <iostream>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Error.h>
 #include <map>
+#include <regex>
 #include <sys/resource.h>
 #include <sys/time.h>
 
@@ -25,6 +27,8 @@
 #include <vector>
 
 #ifdef ENABLE_CUDA
+
+#include "common.hpp"
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -127,6 +131,7 @@ struct HostFuncInfo {
   }
 
   void dump(bool detail = false) const {
+#ifdef __ENABLE_DEBUG__
     std::cout << "Host Pointer: " << h_ptr;
     std::cout << " Device Pointer: " << h_ptr;
     std::cout << " Number of elements: " << elements << "\n";
@@ -135,6 +140,7 @@ struct HostFuncInfo {
         std::cout << "Element [" << i << "]" << h_ptr[i] << "\n";
       }
     }
+#endif
   }
 
   ~HostFuncInfo() {}
@@ -213,6 +219,10 @@ public:
    * snapshot.
    */
   void loadRRGlobals() {
+    static bool RRGlobalsInitialized = false;
+    if (RRGlobalsInitialized)
+      return;
+
     for (auto FB : FatBinaries) {
       CUmodule CUMod;
       std::cout << "Trying to open file " << FB.first << "\n";
@@ -221,17 +231,28 @@ public:
         throw std::runtime_error("Cannot Open Module Binary" +
                                  std::to_string(static_cast<int>(err)));
       }
-      for (auto GM : GlobalsMap) {
-        if (GM.first.find("_record_replay_func_info_") != std::string::npos) {
-          auto hfuncData = loadSymbolToHost<uint64_t>(CUMod, GM.first);
-          std::cout << "Adding: " << GM.first << "\n";
-          ArgsInfo[GM.first] = hfuncData;
-          ArgsInfo[GM.first].dump(true);
-        } else if (GM.first.find("_record_replay_descr_") !=
+      // Every module can have a single IR dump.
+      SmallVector<std::string, 8> ModuleFNames;
+      std::string ModuleName("");
+      for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end();) {
+        if (GM->first.find("_record_replay_func_info_") != std::string::npos) {
+          auto hfuncData = loadSymbolToHost<uint64_t>(CUMod, GM->first);
+          auto FuncName = std::regex_replace(
+              GM->first, std::regex("_record_replay_func_info_"), "");
+
+          std::cout << "Adding: " << FuncName << "\n";
+          ArgsInfo[FuncName] = hfuncData;
+          ArgsInfo[FuncName].dump(true);
+          ModuleFNames.push_back(FuncName);
+          // We erase here. This is not a global we would like to track
+          GM = GlobalsMap.erase(GM);
+        } else if (GM->first.find("_record_replay_descr_") !=
                    std::string::npos) {
-          auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM.first);
+          ModuleName = std::regex_replace(
+              GM->first, std::regex("_record_replay_descr_"), "");
+          auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM->first);
           std::error_code EC;
-          std::string rrBC("record-ir.bc");
+          std::string rrBC(Twine(ModuleName, ".bc").str());
           raw_fd_ostream OutBC(rrBC, EC);
           if (EC)
             throw std::runtime_error("Cannot open device code " + rrBC);
@@ -239,16 +260,42 @@ public:
                              llvmIR.elements);
           OutBC.close();
           llvmIR.dump();
+          // We erase here. This is not a global we would like to track
+          GM = GlobalsMap.erase(GM);
+        } else {
+          CUdeviceptr DevPtr;
+          size_t Bytes;
+          if (cuModuleGetGlobal(&DevPtr, &Bytes, CUMod, GM->first.c_str()) !=
+              CUDA_SUCCESS)
+            throw std::runtime_error("Cannot load Global " + GM->first + "\n");
+          std::cout << "Device Address of Symbol " << GM->first << " is "
+                    << (void *)DevPtr << " with size: " << Bytes << "\n";
+
+          TrackedGlobalVars.emplace(
+              GM->first,
+              std::move(GlobalVar(GM->first, Bytes, (void *)DevPtr)));
+          GM++;
         }
-        // Record replay specific instrumentation variables can removed from the
-        // map
+
+        // Empty means there was a module that was not instrumented with our
+        // pass
+        if (!ModuleName.empty()) {
+          json::Array FNames;
+          for (auto F : ModuleFNames) {
+            FNames.push_back(std::move(F));
+          }
+          FuncsInModules[ModuleName] = json::Value(std::move(FNames));
+        }
       }
     }
+    RRGlobalsInitialized = true;
   }
 
-  // GlobalsMap stores a mapping of host addr to size, will convert to device
-  // pointers using <cuda|hip>GetSymbolAddress.
+  // Contains name of global and respective size;
   std::unordered_map<std::string, size_t> GlobalsMap;
+
+  // All globals we will need to record.
+  std::unordered_map<std::string, GlobalVar> TrackedGlobalVars;
   std::unordered_map<const void *, std::pair<std::string, std::string>>
       SymbolTable;
   std::vector<std::string> SymbolWhiteList;
@@ -258,6 +305,8 @@ public:
 
   std::unordered_map<std::string, HostFuncInfo> ArgsInfo;
   std::unordered_map<const void *, MappedAlloc> devMemory;
+  json::Object RecordedKernels;
+  json::Object FuncsInModules;
 
 private:
   void *device_runtime_handle;
@@ -364,6 +413,17 @@ private:
       }
 #endif
   }
+
+  ~Wrapper() {
+    std::string JsonFilename = "recorded_data.json";
+    std::error_code EC;
+    json::Object record;
+    record["kernels"] = json::Value(std::move(RecordedKernels));
+    record["modules"] = json::Value(std::move(FuncsInModules));
+    raw_fd_ostream JsonOS(JsonFilename, EC);
+    JsonOS << json::Value(std::move(record));
+    JsonOS.close();
+  }
 };
 
 // Overload implementations.
@@ -464,7 +524,8 @@ PREFIX(Error_t) PREFIX(Free)(void *devPtr) {
   return PREFIX(Success);
 }
 
-void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args) {
+void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
+                      std::unordered_map<std::string, GlobalVar> &globalVars) {
   std::error_code EC;
   raw_fd_ostream OutBC(fileName, EC);
   Wrapper *W = Wrapper::instance();
@@ -488,8 +549,37 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args) {
     // without specifying the size. I cast everything into a StringRef to be
     // explicit about the size of the bytes to be stored.
     std::cout << "Argument " << i << " Address "
-              << (void *)(*(uint64_t *)(args[i])) << "\n";
+              << (void *)(*(uint64_t *)(args[i])) << "Size:" << info.h_ptr[i]
+              << "\n";
     OutBC << StringRef(reinterpret_cast<const char *>(args[i]), info.h_ptr[i]);
+  }
+
+  size_t num_variables = globalVars.size();
+  std::cout << "Adding " << num_variables << " global variables\n";
+  OutBC << StringRef(reinterpret_cast<const char *>(&num_variables),
+                     sizeof(num_variables));
+
+  for (const auto &KV : globalVars) {
+    const auto &GV = KV.second;
+
+    size_t name_size = GV.Name.size();
+    OutBC << StringRef(reinterpret_cast<const char *>(&name_size),
+                       sizeof(name_size));
+    OutBC << StringRef(GV.Name.c_str(), GV.Name.size());
+    OutBC << StringRef(reinterpret_cast<const char *>(&GV.Size),
+                       sizeof(GV.Size));
+
+    PREFIX(Memcpy)
+    ((void *)GV.HostPtr, (void *)GV.DevPtr, GV.Size,
+     PREFIX(MemcpyDeviceToHost));
+    OutBC << StringRef(reinterpret_cast<const char *>(GV.HostPtr), GV.Size);
+
+    for (int i = 0; i < GV.Size; i++) {
+      std::cout << "Value at " << i
+                << " is : " << (int)((int8_t *)GV.HostPtr)[i] << "\n";
+    }
+
+    std::cout << "Total Bytes written: " << OutBC.tell() << "\n";
   }
 
   for (auto KV : W->devMemory) {
@@ -537,11 +627,8 @@ PREFIX(LaunchKernel)
   Wrapper *W = Wrapper::instance();
   W->loadRRGlobals();
   std::string func_name = W->SymbolTable[func].first;
-  func_name = "_record_replay_func_info_" + func_name;
   auto func_info = W->ArgsInfo[func_name];
   func_info.dump(true);
-  dumpDeviceMemory("KernelBefore.bin", func_info, args);
-  static std::size_t kernel_counter{0};
   PREFIX(Error_t) ret;
 
   printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
@@ -558,15 +645,17 @@ PREFIX(LaunchKernel)
   Block["y"] = blockDim.y;
   Block["z"] = blockDim.z;
 
+  std::string snapshotName(W->SymbolTable[func].first.c_str());
+
+  dumpDeviceMemory(Twine("Before" + W->SymbolTable[func].first + ".bin").str(),
+                   func_info, args, W->TrackedGlobalVars);
+  func_info.dump(true);
+  KernelInfo["InputData"] =
+      Twine("Before" + W->SymbolTable[func].first + ".bin").str();
+
   KernelInfo["Grid"] = json::Value(std::move(Grid));
   KernelInfo["Block"] = json::Value(std::move(Block));
   KernelInfo["SharedMemory"] = sharedMem;
-
-  std::string JsonFilename = W->SymbolTable[func].first + ".json";
-  std::error_code EC;
-  raw_fd_ostream JsonOS(JsonFilename, EC);
-  JsonOS << json::Value(std::move(KernelInfo));
-  JsonOS.close();
 
   cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
                                           sharedMem, stream));
@@ -575,7 +664,14 @@ PREFIX(LaunchKernel)
   // hesitant for this. Multi-stream execution can potentially modify the device
   // memory as we copy the data.
   PREFIX(DeviceSynchronize());
-  dumpDeviceMemory("KernelAfter.bin", func_info, args);
+  KernelInfo["OutputData"] =
+      Twine("After" + W->SymbolTable[func].first + ".bin").str();
+  func_info.dump(true);
+  dumpDeviceMemory(Twine("After" + W->SymbolTable[func].first + ".bin").str(),
+                   func_info, args, W->TrackedGlobalVars);
+  func_info.dump(true);
+  W->RecordedKernels[func_name] = std::move(KernelInfo);
+
   return ret;
 }
 

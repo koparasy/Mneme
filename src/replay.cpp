@@ -11,14 +11,10 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "common.hpp"
 #include "jit.hpp"
 #include "macro.hpp"
 #include "memory.hpp"
-
-template <typename Ty> Ty *advanceVoidPtr(Ty *Ptr, int64_t Offset) {
-  static_assert(std::is_void<Ty>::value);
-  return const_cast<char *>(reinterpret_cast<const char *>(Ptr) + Offset);
-}
 
 using namespace llvm;
 #ifdef ENABLE_CUDA
@@ -111,6 +107,7 @@ struct BinarySnapshot {
   uint64_t num_args;
   std::vector<uint64_t> arg_size;
   std::unordered_map<intptr_t, MemoryBlob> DeviceBlobs;
+  std::unordered_map<std::string, GlobalVar> TrackedGlobalVars;
 
 private:
   BinarySnapshot() : args(nullptr), num_args(0), arg_size(0) {}
@@ -133,6 +130,7 @@ public:
 
     // read argument values
     const void *BufferPtr = Snapshot.get()->getBufferStart();
+    const void *StartPtr = BufferPtr;
     uint64_t num_args = (*(uint64_t *)BufferPtr);
     BufferPtr = advanceVoidPtr(BufferPtr, sizeof(uint64_t));
     std::cout << "Read " << num_args << " arguments\n";
@@ -150,6 +148,21 @@ public:
     }
     // Header of arguments Finished
     BinarySnapshot MemState((uint8_t **)args, num_args, arg_sizes);
+
+    size_t num_globals = *(size_t *)BufferPtr;
+    BufferPtr = advanceVoidPtr(BufferPtr, sizeof(size_t));
+
+    for (int i = 0; i < num_globals; i++) {
+      GlobalVar global_variable(&BufferPtr);
+      MemState.TrackedGlobalVars.emplace(global_variable.Name,
+                                         std::move(global_variable));
+      std::cout << "Total Bytes read: "
+                << (uintptr_t)BufferPtr - (uintptr_t)StartPtr << "\n";
+    }
+
+    for (auto &GV : MemState.TrackedGlobalVars) {
+      GV.second.dump();
+    }
 
     // Read till the end of the file
     while (BufferPtr != Snapshot.get()->getBufferEnd()) {
@@ -204,10 +217,24 @@ public:
     for (auto &KV : DeviceBlobs) {
       KV.second.copyToDevice();
     }
+    for (auto &KV : TrackedGlobalVars) {
+      std::cout << "COpying to global: " << KV.first << "\n";
+      KV.second.copyToDevice();
+    }
+  }
+
+  void LoadGlobals(CUmodule &CUMod) {
+    for (auto &KV : TrackedGlobalVars) {
+      KV.second.setDevPtrFromModule(CUMod);
+    }
   }
 
   void copyFromDevice() {
     for (auto &KV : DeviceBlobs) {
+      KV.second.copyFromDevice();
+    }
+    for (auto &KV : TrackedGlobalVars) {
+      std::cout << "COpying back global: " << KV.first << "\n";
       KV.second.copyFromDevice();
     }
   }
@@ -217,11 +244,26 @@ public:
     for (auto &KV : DeviceBlobs) {
       uint64_t devAddr = KV.first;
       auto otherEntry = other.DeviceBlobs.find(devAddr);
-      if (otherEntry == other.DeviceBlobs.end())
+      if (otherEntry == other.DeviceBlobs.end()) {
+        std::cout << "Cannot find dev addr \n";
         return false;
+      }
 
-      if (!KV.second.compare(otherEntry->second))
+      if (!KV.second.compare(otherEntry->second)) {
+        std::cout << "Dev Memory differs \n";
         return false;
+      }
+    }
+
+    for (auto &KV : TrackedGlobalVars) {
+      std::cout << "Comparing global " << KV.first << "\n";
+      auto otherEntry = other.TrackedGlobalVars.find(KV.first);
+      if (otherEntry == other.TrackedGlobalVars.end())
+        return false;
+      std::cout << "Comparing global pointers \n";
+      if (!KV.second.compare(otherEntry->second)) {
+        return false;
+      }
     }
     return true;
   }
@@ -261,40 +303,64 @@ dim3 getDim3(json::Object &Info, std::string key) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc < 5) {
+  if (argc != 3) {
     std::cerr << "Wrong CLI, expecting:" << argv[0]
-              << "'Path to IR file' 'Path to device memory before running "
-                 "kernel' 'Path to device memory after running kernel' 'File "
-                 "Name containing kernel description'";
+              << " 'Path to JSON file' 'Function Name to Replay";
     exit(-1);
   }
 
   auto DeviceSpec = init();
   std::string DeviceArch = DeviceSpec.first;
 
-  std::string IRFn(argv[1]);
-  std::string iDeviceMemory(argv[2]);
-  std::string oDeviceMemory(argv[3]);
-  std::string JSONFileName(argv[4]);
+  std::string JSONFileName(argv[1]);
+  std::string KernelName(argv[2]);
 
+  // Load JSON File
   ErrorOr<std::unique_ptr<MemoryBuffer>> KernelInfoMB =
       MemoryBuffer::getFile(JSONFileName, /* isText */ true,
                             /* RequiresNullTerminator */ true);
 
-  Expected<json::Value> JsonKernelInfo =
-      json::parse(KernelInfoMB.get()->getBuffer());
-  if (auto Err = JsonKernelInfo.takeError())
+  Expected<json::Value> JsonInfo = json::parse(KernelInfoMB.get()->getBuffer());
+  if (auto Err = JsonInfo.takeError())
     report_fatal_error("Cannot parse the kernel info json file");
 
-  StringRef KernelName = *JsonKernelInfo->getAsObject()->getString("Name");
-  dim3 gridDim = getDim3(*JsonKernelInfo->getAsObject(), "Grid");
-  dim3 blockDim = getDim3(*JsonKernelInfo->getAsObject(), "Block");
-  size_t SharedMem = *JsonKernelInfo->getAsObject()->getInteger("SharedMemory");
+  json::Object *RecordInfo = JsonInfo->getAsObject()->getObject("kernels");
+  json::Value *Info = RecordInfo->get(KernelName);
+  if (Info == nullptr) {
+    report_fatal_error("Requested function does not have a record entry");
+  }
+  json::Object KernelInfo = *Info->getAsObject();
+
+  std::string iDeviceMemory(KernelInfo.getString("InputData")->str());
+  std::string oDeviceMemory(KernelInfo.getString("OutputData")->str());
+
+  dim3 gridDim = getDim3(KernelInfo, "Grid");
+  dim3 blockDim = getDim3(KernelInfo, "Block");
+  size_t SharedMem = *KernelInfo.getInteger("SharedMemory");
 
   // Load Kernel Input
   BinarySnapshot input = BinarySnapshot::Load(iDeviceMemory);
   BinarySnapshot output = BinarySnapshot::Load(oDeviceMemory);
   input.AllocateDevice(true);
+
+  json::Object *RecordedModules = JsonInfo->getAsObject()->getObject("modules");
+  assert(RecordedModules->size() == 1 &&
+         "Record replay does not support multiple modules");
+
+  std::unordered_map<std::string, std::vector<std::string>> IRtoFuncMap;
+
+  for (auto KV : *RecordedModules) {
+    std::string LLVMIR = KV.first.str();
+    json::Array &FuncNames = *KV.second.getAsArray();
+    std::vector<std::string> FNNames;
+    for (auto A : FuncNames) {
+      FNNames.push_back(A.getAsString()->str());
+    }
+    IRtoFuncMap[LLVMIR] = std::move(FNNames);
+  }
+
+  auto Entry = *IRtoFuncMap.begin();
+  std::string IRFn = Twine(Entry.first, ".bc").str();
 
   // Load IR
   InitJITEngine();
@@ -325,7 +391,7 @@ int main(int argc, char *argv[]) {
   CUfunction DevFunction;
   CreateDeviceObject(PTX, DevModule);
   GetDeviceFunction(DevFunction, DevModule, KernelName);
-  std::cout << "Launching\n";
+  input.LoadGlobals(DevModule);
   input.copyToDevice();
   input.dump();
 
