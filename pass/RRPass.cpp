@@ -53,6 +53,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/MemoryBufferRef.h>
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -260,8 +261,14 @@ void deviceInstrumentation(Module &M) {
 
   appendToUsed(M, {GVIR});
 
-  errs() << "DEVICE MODULE: \n";
-  errs() << M << "\n";
+  std::filesystem::path filename(M.getSourceFileName());
+  std::string rrBC(Twine(filename.filename().string(), ".device-rr.bc").str());
+  std::error_code EC;
+  raw_fd_ostream OutBC(rrBC, EC);
+  if (EC)
+    throw std::runtime_error("Cannot open device code " + rrBC);
+  OutBC << M;
+  OutBC.close();
 }
 
 static bool HasDeviceKernelCalls(Module &M) {
@@ -472,9 +479,15 @@ void hostInstrumentation(Module &M) {
 
   RegisterLLVMIRVariable(M);
   RegisterFatBinary(M);
-  errs() << M << "\n";
 
-  //
+  std::filesystem::path filename(M.getSourceFileName());
+  std::string rrBC(Twine(filename.filename().string(), ".host-rr.bc").str());
+  std::error_code EC;
+  raw_fd_ostream OutBC(rrBC, EC);
+  if (EC)
+    throw std::runtime_error("Cannot open device code " + rrBC);
+  OutBC << M;
+  OutBC.close();
 }
 
 void visitor(Module &M) {

@@ -181,14 +181,7 @@ public:
   }
 
   template <typename dType>
-  HostFuncInfo loadSymbolToHost(CUmodule &CUMod,
-                                const std::string &symbolName) {
-    CUdeviceptr DevPtr;
-    size_t Bytes;
-
-    if (cuModuleGetGlobal(&DevPtr, &Bytes, CUMod, symbolName.c_str()) !=
-        CUDA_SUCCESS)
-      throw std::runtime_error("Cannot load Global " + symbolName + "\n");
+  HostFuncInfo loadSymbolToHost(void *DevPtr, size_t Bytes) {
 
     assert(Bytes == sizeof(FuncInfo) && "Func info size do not match");
     FuncInfo funcData;
@@ -206,97 +199,130 @@ public:
     return hfuncData;
   }
 
-  /* TODO: We need to call loadRRGlobals once. The job of the loadRR is
-   * the following
-   * 1. Store into files the LLVM-IR so that these files are accessible.
-   * 2. Register to the wrapper the file names (those can be many, as we have a
-   * single file per translation unit.)
-   * 3. We need a correspondance of function to file and we need also a
-   * correspondance of the order of loading the IR files.
-   * 4. At the end the function needs to keep track of the following:
-   *    a. Name of global,
-   *    b. device address of global
-   *    c. Size of data of global.
-   *    These values should be serializable every time we call a kernel to a
-   * snapshot.
-   */
+  void addGlobal(const std::string &SymbolName, void *DevPtr, size_t Bytes) {
+    if (SymbolName.find("_record_replay_func_info_") != std::string::npos) {
+      auto hfuncData = loadSymbolToHost<uint64_t>(DevPtr, Bytes);
+      auto FuncName = std::regex_replace(
+          SymbolName, std::regex("_record_replay_func_info_"), "");
+
+      std::cout << "Adding: " << FuncName << "\n";
+      ArgsInfo[FuncName] = hfuncData;
+      ArgsInfo[FuncName].dump(true);
+    } else if (SymbolName.find("_record_replay_descr_") != std::string::npos) {
+      std::string ModuleName = std::regex_replace(
+          SymbolName, std::regex("_record_replay_descr_"), "");
+      std::cout << "Found record replay description\n";
+      auto llvmIRInfo = loadSymbolToHost<uint8_t>(DevPtr, Bytes);
+      std::error_code EC;
+
+      std::string extracted_ir_fn(
+          Twine(record_replay_dir.string() + ModuleName, ".bc").str());
+      raw_fd_ostream OutBC(extracted_ir_fn, EC);
+      if (EC)
+        throw std::runtime_error("Cannot open device code " + extracted_ir_fn);
+      OutBC << StringRef(reinterpret_cast<const char *>(llvmIRInfo.h_ptr),
+                         llvmIRInfo.elements);
+      std::cout << "Registered Record replay descr";
+      OutBC.close();
+      llvmIRInfo.dump();
+      ModuleFiles.push_back(std::move(extracted_ir_fn));
+    } else {
+      std::cout << "Device Address of Symbol " << SymbolName << " is " << DevPtr
+                << " with size: " << Bytes << "\n";
+
+      TrackedGlobalVars.emplace(
+          SymbolName, std::move(GlobalVar(SymbolName, Bytes, (void *)DevPtr)));
+    }
+
+    // We erase here. This is not a global we would like to track
+  }
+
   void loadRRGlobals() {
     static bool RRGlobalsInitialized = false;
     if (RRGlobalsInitialized)
       return;
-
-    for (auto FB : FatBinaries) {
-      CUmodule CUMod;
-      std::cout << "Trying to open file " << FB.first << "\n";
-      auto err = cuModuleLoadFatBinary(&CUMod, FB.first->binary);
-      if (err != CUDA_SUCCESS) {
-        throw std::runtime_error("Cannot Open Module Binary" +
-                                 std::to_string(static_cast<int>(err)));
-      }
-      // Every module can have a single IR dump.
-      SmallVector<std::string, 8> ModuleFNames;
-      std::string ModuleName("");
-      for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end();) {
-        if (GM->first.find("_record_replay_func_info_") != std::string::npos) {
-          auto hfuncData = loadSymbolToHost<uint64_t>(CUMod, GM->first);
-          auto FuncName = std::regex_replace(
-              GM->first, std::regex("_record_replay_func_info_"), "");
-
-          std::cout << "Adding: " << FuncName << "\n";
-          ArgsInfo[FuncName] = hfuncData;
-          ArgsInfo[FuncName].dump(true);
-          ModuleFNames.push_back(FuncName);
-          // We erase here. This is not a global we would like to track
-          GM = GlobalsMap.erase(GM);
-        } else if (GM->first.find("_record_replay_descr_") !=
-                   std::string::npos) {
-          ModuleName = std::regex_replace(
-              GM->first, std::regex("_record_replay_descr_"), "");
-          std::cout << "Found record replay description\n";
-          auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM->first);
-          std::error_code EC;
-          std::string rrBC(Twine(ModuleName, ".bc").str());
-          raw_fd_ostream OutBC(rrBC, EC);
-          if (EC)
-            throw std::runtime_error("Cannot open device code " + rrBC);
-          OutBC << StringRef(reinterpret_cast<const char *>(llvmIR.h_ptr),
-                             llvmIR.elements);
-          std::cout << "Registered Record replay descr";
-          OutBC.close();
-          llvmIR.dump();
-          // We erase here. This is not a global we would like to track
-          GM = GlobalsMap.erase(GM);
-        } else {
-          CUdeviceptr DevPtr;
-          size_t Bytes;
-          if (cuModuleGetGlobal(&DevPtr, &Bytes, CUMod, GM->first.c_str()) !=
-              CUDA_SUCCESS)
-            throw std::runtime_error("Cannot load Global " + GM->first + "\n");
-          std::cout << "Device Address of Symbol " << GM->first << " is "
-                    << (void *)DevPtr << " with size: " << Bytes << "\n";
-
-          TrackedGlobalVars.emplace(
-              GM->first,
-              std::move(GlobalVar(GM->first, Bytes, (void *)DevPtr)));
-          GM++;
-        }
-
-        // Empty means there was a module that was not instrumented with our
-        // pass
-        if (!ModuleName.empty()) {
-          json::Array FNames;
-          for (auto F : ModuleFNames) {
-            FNames.push_back(std::move(F));
-          }
-          FuncsInModules[ModuleName] = json::Value(std::move(FNames));
-        }
-      }
+    for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end(); GM++) {
+      void *DevPtr;
+      cudaErrCheck(cudaGetSymbolAddress(&DevPtr, GM->second.second));
+      addGlobal(GM->first, DevPtr, GM->second.first);
     }
     RRGlobalsInitialized = true;
   }
 
+  //  for (auto FB : FatBinaries) {
+  //    CUmodule CUMod;
+  //    std::cout << "Trying to open file " << FB.first << "\n";
+  //    auto err = cuModuleLoadFatBinary(&CUMod, FB.first->binary);
+  //    if (err != CUDA_SUCCESS) {
+  //      throw std::runtime_error("Cannot Open Module Binary" +
+  //                               std::to_string(static_cast<int>(err)));
+  //    }
+  //    // Every module can have a single IR dump.
+  //    SmallVector<std::string, 8> ModuleFNames;
+  //    std::string ModuleName("");
+  //    for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end();) {
+  //      if (GM->first.find("_record_replay_func_info_") != std::string::npos)
+  //      {
+  //        auto hfuncData = loadSymbolToHost<uint64_t>(CUMod, GM->first);
+  //        auto FuncName = std::regex_replace(
+  //            GM->first, std::regex("_record_replay_func_info_"), "");
+
+  //        std::cout << "Adding: " << FuncName << "\n";
+  //        ArgsInfo[FuncName] = hfuncData;
+  //        ArgsInfo[FuncName].dump(true);
+  //        ModuleFNames.push_back(FuncName);
+  //        // We erase here. This is not a global we would like to track
+  //        GM = GlobalsMap.erase(GM);
+  //      } else if (GM->first.find("_record_replay_descr_") !=
+  //                 std::string::npos) {
+  //        ModuleName = std::regex_replace(
+  //            GM->first, std::regex("_record_replay_descr_"), "");
+  //        std::cout << "Found record replay description\n";
+  //        auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM->first);
+  //        std::error_code EC;
+  //        std::string rrBC(Twine(ModuleName, ".bc").str());
+  //        raw_fd_ostream OutBC(rrBC, EC);
+  //        if (EC)
+  //          throw std::runtime_error("Cannot open device code " + rrBC);
+  //        OutBC << StringRef(reinterpret_cast<const char *>(llvmIR.h_ptr),
+  //                           llvmIR.elements);
+  //        std::cout << "Registered Record replay descr";
+  //        OutBC.close();
+  //        llvmIR.dump();
+  //        // We erase here. This is not a global we would like to track
+  //        GM = GlobalsMap.erase(GM);
+  //      } else {
+  //        CUdeviceptr DevPtr;
+  //        size_t Bytes;
+  //        if (cuModuleGetGlobal(&DevPtr, &Bytes, CUMod, GM->first.c_str()) !=
+  //            CUDA_SUCCESS)
+  //          throw std::runtime_error("Cannot load Global " + GM->first +
+  //          "\n");
+  //        std::cout << "Device Address of Symbol " << GM->first << " is "
+  //                  << (void *)DevPtr << " with size: " << Bytes << "\n";
+
+  //        TrackedGlobalVars.emplace(
+  //            GM->first,
+  //            std::move(GlobalVar(GM->first, Bytes, (void *)DevPtr)));
+  //        GM++;
+  //      }
+
+  //      // Empty means there was a module that was not instrumented with our
+  //      // pass
+  //      if (!ModuleName.empty()) {
+  //        json::Array FNames;
+  //        for (auto F : ModuleFNames) {
+  //          FNames.push_back(std::move(F));
+  //        }
+  //        FuncsInModules[ModuleName] = json::Value(std::move(FNames));
+  //      }
+  //    }
+  //  }
+  //  RRGlobalsInitialized = true;
+  //}
+
   // Contains name of global and respective size;
-  std::unordered_map<std::string, size_t> GlobalsMap;
+  std::unordered_map<std::string, std::pair<size_t, const char *>> GlobalsMap;
 
   // All globals we will need to record.
   std::unordered_map<std::string, GlobalVar> TrackedGlobalVars;
@@ -310,7 +336,7 @@ public:
   std::unordered_map<std::string, HostFuncInfo> ArgsInfo;
   std::unordered_map<const void *, MappedAlloc> devMemory;
   json::Object RecordedKernels;
-  json::Object FuncsInModules;
+  json::Array ModuleFiles;
 
   const std::filesystem::path &getDataStoreDir() const {
     return record_replay_dir;
@@ -446,7 +472,8 @@ private:
     std::error_code EC;
     json::Object record;
     record["kernels"] = json::Value(std::move(RecordedKernels));
-    record["modules"] = json::Value(std::move(FuncsInModules));
+    record["modules"] = json::Value(
+        std::move(ModuleFiles)); // json::Value(std::move(FuncsInModules));
     raw_fd_ostream JsonOS(JsonFilename.string(), EC);
     JsonOS << json::Value(std::move(record));
     JsonOS.close();
@@ -474,17 +501,20 @@ void PREFIX_UU(RegisterVar)(void **fatCubinHandle, char *hostVar,
   Wrapper *W = Wrapper::instance();
   __deviceRegisterVarInternal(fatCubinHandle, hostVar, deviceAddress,
                               deviceName, ext, size, constant, global);
-  DEBUG(std::cout << "hostVar " << (void *)hostVar << " deviceAddr "
-                  << (void *)deviceAddress << " deviceName " << deviceName
-                  << " ext " << ext << " size " << size << " constant "
-                  << constant << " global " << global << "\n";)
 
   if (constant)
     return;
 
-  assert(W->GlobalsMap.count(hostVar) == 0 &&
-         "Expected non-duplicate Entry in globals");
-  W->GlobalsMap[std::string(deviceName)] = size;
+  //  assert(W->GlobalsMap.count(hostVar) == 0 &&
+  //         "Expected non-duplicate Entry in globals");
+  W->GlobalsMap[std::string(deviceName)] = std::make_pair(size, hostVar);
+
+  DEBUG(std::cout << "hostVar " << (void *)hostVar << " deviceAddr "
+                  << (void *)deviceAddress << " deviceName " << deviceName
+                  << " ext " << ext << " size " << size << " constant "
+                  << constant << " global " << global << " SymbolAddr is "
+                  << "\n";)
+  //  W->addGlobal(deviceName, DevPtr, size);
 }
 
 void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
@@ -504,9 +534,9 @@ void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
 }
 
 void *suggestAddr() {
-  // FIXME: This was a try and error approach. Getting a device address this way
-  // allows replay to obtain it again. Otherwise driver returns insignficant
-  // results
+  // FIXME: This was a try and error approach. Getting a device address this
+  // way allows replay to obtain it again. Otherwise driver returns
+  // insignficant results
   void *ptr;
   cudaErrCheck(deviceMallocInternal(&ptr, 1024));
   std::cout << "Allocated address " << ptr << "\n";
@@ -686,10 +716,10 @@ PREFIX(LaunchKernel)
 
   cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
                                           sharedMem, stream));
-  // TODO: We need here to sync, make sure we get all the data after termination
-  // of the kernel. Alternatively we can synchronize with the stream. I am
-  // hesitant for this. Multi-stream execution can potentially modify the device
-  // memory as we copy the data.
+  // TODO: We need here to sync, make sure we get all the data after
+  // termination of the kernel. Alternatively we can synchronize with the
+  // stream. I am hesitant for this. Multi-stream execution can potentially
+  // modify the device memory as we copy the data.
   PREFIX(DeviceSynchronize());
   auto oDataFn = W->getDataStoreDir() /
                  Twine("After" + W->SymbolTable[func].first + ".bin").str();

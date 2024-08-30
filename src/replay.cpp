@@ -344,24 +344,15 @@ int main(int argc, char *argv[]) {
   BinarySnapshot output = BinarySnapshot::Load(oDeviceMemory);
   input.AllocateDevice(true);
 
-  json::Object *RecordedModules = JsonInfo->getAsObject()->getObject("modules");
+  json::Array *RecordedModules = JsonInfo->getAsObject()->getArray("modules");
   assert(RecordedModules->size() == 1 &&
          "Record replay does not support multiple modules");
-
-  std::unordered_map<std::string, std::vector<std::string>> IRtoFuncMap;
-
-  for (auto KV : *RecordedModules) {
-    std::string LLVMIR = KV.first.str();
-    json::Array &FuncNames = *KV.second.getAsArray();
-    std::vector<std::string> FNNames;
-    for (auto A : FuncNames) {
-      FNNames.push_back(A.getAsString()->str());
-    }
-    IRtoFuncMap[LLVMIR] = std::move(FNNames);
+  auto moduleFN = RecordedModules->front().getAsString();
+  if (!moduleFN.has_value()) {
+    throw std::runtime_error(
+        "Expecting at least a single module file name, got None");
   }
-
-  auto Entry = *IRtoFuncMap.begin();
-  std::string IRFn = Twine(Entry.first, ".bc").str();
+  std::string IRFn(moduleFN.value().str());
 
   // Load IR
   InitJITEngine();
