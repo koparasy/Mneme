@@ -496,7 +496,7 @@ int main(int argc, char *argv[]) {
   input.copyFromDevice();
 
   if (input.compare(output)) {
-    std::cout << "Results match [Verified]";
+    std::cout << "Results match [Verified]\n";
     return 0;
   }
   std::cout << "Results do not match [incorrect replay]";

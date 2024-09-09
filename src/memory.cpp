@@ -198,6 +198,7 @@ PageManager::ReserveBestFitPage(uint64_t VASize) {
 std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
                                                              void *VA) {
   // We need to always reserve at least a single page
+  std::cout << "Requesting exact page\n";
   uint64_t ReqSize = util::RoundUp(VASize, PageSize);
   auto FreeNode = findInclusivePage((uintptr_t)VA, ReqSize);
   if (FreeNode == FreeVARanges.end())
@@ -206,11 +207,26 @@ std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
   auto Ptr = FreeNode->PageAddr;
   auto NodePageSize = FreeNode->Size;
 
+  std::cout << "Returned start: " << std::hex << Ptr << " End: " << std::hex
+            << Ptr + NodePageSize << "\n";
+
   FreeVARanges.erase(FreeNode);
 
   // We found exactly the requested page.
   if (ReqSize == NodePageSize && (uintptr_t)VA == Ptr)
     return std::make_pair(Ptr, ReqSize);
+
+  if (VA != nullptr) {
+    if ((uintptr_t)VA < Ptr ||
+        ((uintptr_t)VA + VASize) > (Ptr + NodePageSize)) {
+      std::ostringstream oss;
+      oss << "Unable to return requested address: " << std::hex
+          << reinterpret_cast<uintptr_t>(VA)
+          << " instead the returned address is " << std::hex
+          << reinterpret_cast<uintptr_t>(Ptr) << "\n";
+      throw std::runtime_error(oss.str());
+    }
+  }
 
   // There are 'unused' addresses left from the requested one
   // We add them back to the page manager
@@ -229,7 +245,7 @@ std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
   // modifies our free-pages.
   coalesce();
 
-  return std::make_pair(Ptr, ReqSize);
+  return std::make_pair((uintptr_t)VA, ReqSize);
 }
 
 std::pair<uintptr_t, uint64_t> PageManager::AllocatePage(uint64_t VASize,
@@ -271,19 +287,6 @@ PageManager::~PageManager() {
  */
 gpu::MemoryBlob PageManager::AllocateMemoryBlob(uint64_t VASize, void *VA) {
   auto [AllocatedPagedAddr, Size] = AllocatePage(VASize, VA);
-
-  if (VA != nullptr) {
-    if ((uintptr_t)VA < AllocatedPagedAddr ||
-        ((uintptr_t)VA + VASize) > (AllocatedPagedAddr + Size)) {
-      std::ostringstream oss;
-      oss << "Unable to return requested address: " << std::hex
-          << reinterpret_cast<uintptr_t>(VA)
-          << " instead the returned address is " << std::hex
-          << reinterpret_cast<uintptr_t>(AllocatedPagedAddr) << "\n";
-      throw std::runtime_error(oss.str());
-    }
-  }
-
   // Once we have the allocated address we need to Allocate the memory
   auto MemBlob = gpu::MemoryBlob(AllocatedPagedAddr, Size);
   return std::move(MemBlob);

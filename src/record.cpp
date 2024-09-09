@@ -481,6 +481,7 @@ PREFIX(MallocManaged)(void **ptr, size_t size, unsigned int flags) {
 }
 
 PREFIX(Error_t) PREFIX(Free)(void *devPtr) {
+  std::cout << "Releasing memory " << std::hex << devPtr << "\n";
   Wrapper *W = Wrapper::instance();
   assert(W->MemManager != nullptr &&
          "When Freeing memory Memory Manager needs to be initialized\n");
