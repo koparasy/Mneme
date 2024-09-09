@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iostream>
 
+using namespace util;
 GlobalVar::GlobalVar(GlobalVar &&old) {
   this->Name = old.Name;
   this->Size = old.Size;
@@ -45,11 +46,11 @@ GlobalVar::GlobalVar(const void **BufferPtr) {
 }
 
 void GlobalVar::dump() {
-  std::cout << "Global Variable:" << Name << " " << Size << "\n";
-  for (int i = 0; i < Size; i++) {
-    std::cout << "Value at " << i << " is : " << (int)((int8_t *)HostPtr)[i]
-              << "\n";
-  }
+  //  std::cout << "Global Variable:" << Name << " " << Size << "\n";
+  //  for (int i = 0; i < Size; i++) {
+  //    std::cout << "Value at " << i << " is : " << (int)((int8_t *)HostPtr)[i]
+  //              << "\n";
+  //  }
 }
 
 void GlobalVar::setDevPtrFromModule(CUmodule &CUMod) {
@@ -77,11 +78,11 @@ void GlobalVar::copyFromDevice() {
 bool GlobalVar::compare(GlobalVar &other) {
   if (Size != other.Size)
     return false;
-  std::cout << "Sizes are equal\n";
+  // std::cout << "Sizes are equal\n";
   if (Name != other.Name)
     return false;
 
-  std::cout << "Names are the same '" << other.Name << "'\n";
+  // std::cout << "Names are the same '" << other.Name << "'\n";
 
   if (std::memcmp(HostPtr, other.HostPtr, Size) != 0) {
     int8_t *host_ptr = (int8_t *)HostPtr;

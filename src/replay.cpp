@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <llvm/IR/Constants.h>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
@@ -15,60 +16,137 @@
 #include "jit.hpp"
 #include "macro.hpp"
 #include "memory.hpp"
+#include <llvm/Support/CommandLine.h>
+#include <llvm/Support/InitLLVM.h>
 
 using namespace llvm;
 #ifdef ENABLE_CUDA
 using namespace jit::cuda;
 #endif
 
+static cl::OptionCategory ReplayCategory("Replay Tool Options",
+                                         "Record Replay CLI options.");
+
+static cl::opt<long>
+    blockDimx("blockDimx",
+              cl::desc("The number of threads on x dimension to "
+                       "assign to a block during kernel replay"),
+              cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<long>
+    blockDimy("blockDimy",
+              cl::desc("The number of threads on x dimension to "
+                       "assign to a block during kernel replay"),
+              cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<long>
+    blockDimz("blockDimz",
+              cl::desc("The number of threads on x dimension to "
+                       "assign to a block during kernel replay"),
+              cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<long>
+    gridDimx("gridDimx",
+             cl::desc("The number of threads on x dimension to "
+                      "assign to a grid during kernel replay"),
+             cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<long>
+    gridDimy("gridDimy",
+             cl::desc("The number of threads on x dimension to "
+                      "assign to a grid during kernel replay"),
+             cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<long>
+    gridDimz("gridDimz",
+             cl::desc("The number of threads on x dimension to "
+                      "assign to a grid during kernel replay"),
+             cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<std::string>
+    KernelName("kernel-name", cl::desc("The kernel function to replay"),
+               cl::Required, cl::cat(ReplayCategory));
+
+static cl::opt<int> MaxThreads("max-threads",
+                               cl::desc("Assing MaxThreads Launchbound"),
+                               cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<int> MinBlocks("min-blocks",
+                              cl::desc("Assing MinBlocks Launchbound"),
+                              cl::init(-1), cl::cat(ReplayCategory));
+
+static cl::opt<bool> SaveTemps("save-temps",
+                               cl::desc("Save temporal files to disk"),
+                               cl::init(false), cl::cat(ReplayCategory));
+
+static cl::opt<std::string> RRJson(
+    "record-replay-json",
+    cl::desc("The json file containing metadata for all recorded kernels"),
+    cl::Required);
+
+void WriteToFile(Module &M, std::string FileName, bool save = false) {
+  if (!save)
+    return;
+  std::error_code EC;
+  raw_fd_ostream OutBC(FileName, EC);
+  if (EC)
+    throw std::runtime_error("Cannot write code " + FileName);
+  OutBC << M;
+  OutBC.close();
+}
+
+void AssignLaunchBounds(llvm::Module &M, llvm::Function &F, int MaxThreads,
+                        int MinBlocks) {
+
+  llvm::NamedMDNode *MD = M.getOrInsertNamedMetadata("nvvm.annotations");
+  if (MaxThreads != -1) {
+    llvm::Metadata *MDVals[] = {
+        llvm::ConstantAsMetadata::get(&F),
+        llvm::MDString::get(M.getContext(), "maxntidx"),
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(M.getContext()), MaxThreads))};
+    MD->addOperand(llvm::MDNode::get(M.getContext(), MDVals));
+  }
+
+  if (MinBlocks != -1) {
+    llvm::Metadata *MDVals[] = {
+        llvm::ConstantAsMetadata::get(&F),
+        llvm::MDString::get(M.getContext(), "minctasm"),
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(M.getContext()), MinBlocks))};
+    MD->addOperand(llvm::MDNode::get(M.getContext(), MDVals));
+  }
+}
+
 class MemoryBlob {
+  MemoryManager &MemManager;
   void *HostPtr;
   void *DevPtr;
   uint64_t MemSize;
   uint64_t MappedMemSize;
   bool Mapped;
   bool Copied;
-  CUmemGenericAllocationHandle MemHandle;
 
 public:
-  MemoryBlob() : HostPtr(nullptr), DevPtr(nullptr), MemSize(0), Mapped(false) {}
-  MemoryBlob(void *hPtr, uint64_t size)
-      : DevPtr(nullptr), MemSize(size), Mapped(false), Copied(false) {
+  MemoryBlob(MemoryManager &MemManager, void *hPtr, uint64_t size)
+      : MemManager(MemManager), DevPtr(nullptr), MemSize(size), Mapped(false),
+        Copied(false) {
     HostPtr = new uint8_t[MemSize];
     std::memcpy(HostPtr, hPtr, size);
   }
   MemoryBlob(MemoryBlob &&orig)
-      : HostPtr(orig.HostPtr), DevPtr(orig.DevPtr), MemSize(orig.MemSize),
-        Mapped(orig.Mapped), Copied(orig.Copied) {
+      : MemManager(orig.MemManager), HostPtr(orig.HostPtr), DevPtr(orig.DevPtr),
+        MemSize(orig.MemSize), Mapped(orig.Mapped), Copied(orig.Copied) {
     orig.HostPtr = nullptr;
     orig.DevPtr = nullptr;
   }
+
   MemoryBlob(const MemoryBlob &) = delete;
   MemoryBlob &operator=(const MemoryBlob &) = delete;
 
   void dump() const {
     std::cout << "MemSize: " << MemSize << " Mapped: " << Mapped
               << " Copied: " << Copied << "\n";
-  }
-
-  void AllocateDevice() {
-    cudaErrCheck(cudaMalloc(&DevPtr, MemSize));
-    Mapped = false;
-  }
-
-  void MemMapToDevice(void *req_addr) {
-    // TODO: We currently ignore the address, this can result in weird issues
-    // later on
-    MemHandle = memory::cuda::MemMapToDevice(&DevPtr, req_addr, MemSize,
-                                             MappedMemSize, 0);
-    std::cout << "SUCCESS:: " << DevPtr << " Req Size: " << MemSize
-              << " Provided : " << MappedMemSize << "\n";
-    if (req_addr != DevPtr) {
-      std::cerr << "Requested " << req_addr << " But got " << DevPtr << "\n";
-      report_fatal_error("Error Address does not match record run\n");
-    }
-    Mapped = true;
-    return;
   }
 
   void copyToDevice() {
@@ -89,30 +167,30 @@ public:
     return std::memcmp(ptr1, ptr2, MemSize) == 0;
   }
 
+  void Reserve(void *DevAddr = nullptr) {
+    DevPtr = MemManager.allocate(MemSize, DevAddr);
+  }
+
   ~MemoryBlob() {
     if (HostPtr)
       delete[] (uint8_t *)HostPtr;
-    if (DevPtr) {
-      if (!Mapped) {
-        cudaErrCheck(cudaFree(DevPtr));
-      } else {
-        memory::cuda::MemoryUnMap(DevPtr, MemHandle, MappedMemSize);
-      }
-    }
+    if (DevPtr)
+      MemManager.release(DevPtr);
   }
 };
 
 struct BinarySnapshot {
+  MemoryManager &MemManager;
   uint8_t **args;
   uint64_t num_args;
   std::vector<uint64_t> arg_size;
-  std::unordered_map<intptr_t, MemoryBlob> DeviceBlobs;
+  std::map<intptr_t, MemoryBlob> DeviceBlobs;
   std::unordered_map<std::string, GlobalVar> TrackedGlobalVars;
 
 private:
-  BinarySnapshot() : args(nullptr), num_args(0), arg_size(0) {}
-  BinarySnapshot(uint8_t **args, int64_t nargs, std::vector<uint64_t> &sizes)
-      : args(args), num_args(nargs), arg_size(sizes) {}
+  BinarySnapshot(MemoryManager &MemManager, uint8_t **args, int64_t nargs,
+                 std::vector<uint64_t> &sizes)
+      : MemManager(MemManager), args(args), num_args(nargs), arg_size(sizes) {}
 
 public:
   static void **allocateArgs(std::vector<uint64_t> &args) {
@@ -123,7 +201,7 @@ public:
     return ptrs;
   }
 
-  static BinarySnapshot Load(std::string FileName) {
+  static BinarySnapshot Load(MemoryManager &MemManager, std::string FileName) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> Snapshot =
         MemoryBuffer::getFile(FileName, /* isText */ false,
                               /* RequiresNullTerminator */ false);
@@ -132,25 +210,25 @@ public:
     const void *BufferPtr = Snapshot.get()->getBufferStart();
     const void *StartPtr = BufferPtr;
     uint64_t num_args = (*(uint64_t *)BufferPtr);
-    BufferPtr = advanceVoidPtr(BufferPtr, sizeof(uint64_t));
+    BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(uint64_t));
     std::cout << "Read " << num_args << " arguments\n";
     std::vector<uint64_t> arg_sizes;
     for (int i = 0; i < num_args; i++) {
       arg_sizes.push_back(*(uint64_t *)BufferPtr);
-      BufferPtr = advanceVoidPtr(BufferPtr, sizeof(uint64_t));
+      BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(uint64_t));
     }
 
     void **args = allocateArgs(arg_sizes);
 
     for (int i = 0; i < num_args; i++) {
       std::memcpy(args[i], BufferPtr, arg_sizes[i]);
-      BufferPtr = advanceVoidPtr(BufferPtr, arg_sizes[i]);
+      BufferPtr = util::advanceVoidPtr(BufferPtr, arg_sizes[i]);
     }
     // Header of arguments Finished
-    BinarySnapshot MemState((uint8_t **)args, num_args, arg_sizes);
+    BinarySnapshot MemState(MemManager, (uint8_t **)args, num_args, arg_sizes);
 
     size_t num_globals = *(size_t *)BufferPtr;
-    BufferPtr = advanceVoidPtr(BufferPtr, sizeof(size_t));
+    BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(size_t));
 
     for (int i = 0; i < num_globals; i++) {
       GlobalVar global_variable(&BufferPtr);
@@ -167,16 +245,20 @@ public:
     // Read till the end of the file
     while (BufferPtr != Snapshot.get()->getBufferEnd()) {
       intptr_t dPtr = *(intptr_t *)BufferPtr;
-      BufferPtr = advanceVoidPtr(BufferPtr, sizeof(intptr_t));
+      BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(intptr_t));
 
       size_t memBlobSize = *(uint64_t *)BufferPtr;
-      BufferPtr = advanceVoidPtr(BufferPtr, sizeof(uint64_t));
+      BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(uint64_t));
 
-      MemState.DeviceBlobs.emplace(dPtr,
-                                   MemoryBlob((void *)BufferPtr, memBlobSize));
+      MemState.DeviceBlobs.emplace(
+          dPtr, MemoryBlob(MemManager, (void *)BufferPtr, memBlobSize));
       std::cout << "I just added :\n";
-      MemState.DeviceBlobs[dPtr].dump();
-      BufferPtr = advanceVoidPtr(BufferPtr, memBlobSize);
+      auto it = MemState.DeviceBlobs.find(dPtr);
+      if (it != MemState.DeviceBlobs.end()) {
+        it->second.dump();
+      }
+
+      BufferPtr = util::advanceVoidPtr(BufferPtr, memBlobSize);
     }
 
     return MemState;
@@ -204,11 +286,12 @@ public:
   void AllocateDevice(bool Map = true) {
     if (Map) {
       for (auto &KV : DeviceBlobs) {
-        KV.second.MemMapToDevice((void *)KV.first);
+        std::cout << "Starting with first addr " << (void *)KV.first << "\n";
+        KV.second.Reserve((void *)KV.first);
       }
     } else {
       for (auto &KV : DeviceBlobs) {
-        KV.second.AllocateDevice();
+        KV.second.Reserve();
       }
     }
   }
@@ -295,37 +378,49 @@ std::pair<std::string, CUdevice> init() {
   return std::make_pair(CudaArch, CUDev);
 }
 
-dim3 getDim3(json::Object &Info, std::string key) {
+dim3 getDim3(json::Object &Info, std::string key, long opt_x, long opt_y,
+             long opt_z) {
+  std::cout << "Opt X " << opt_x << "\n";
+  std::cout << "Opt Y " << opt_y << "\n";
+  std::cout << "Opt Z " << opt_z << "\n";
   auto JObject = Info.getObject(key);
-  long x = *JObject->getInteger("x");
-  long y = *JObject->getInteger("y");
-  long z = *JObject->getInteger("z");
+  long x = (opt_x == -1) ? *JObject->getInteger("x") : opt_x;
+  long y = (opt_y == -1) ? *JObject->getInteger("y") : opt_y;
+  long z = (opt_z == -1) ? *JObject->getInteger("z") : opt_z;
   return dim3(x, y, z);
 }
 
 int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    std::cerr << "Wrong CLI, expecting:" << argv[0]
-              << " 'Path to JSON file' 'Function Name to Replay";
-    exit(-1);
-  }
+  cl::HideUnrelatedOptions(ReplayCategory);
+  cl::ParseCommandLineOptions(argc, argv, "GPU Replay Tool\n");
 
   auto DeviceSpec = init();
   std::string DeviceArch = DeviceSpec.first;
 
-  std::string JSONFileName(argv[1]);
-  std::string KernelName(argv[2]);
-
   // Load JSON File
   ErrorOr<std::unique_ptr<MemoryBuffer>> KernelInfoMB =
-      MemoryBuffer::getFile(JSONFileName, /* isText */ true,
+      MemoryBuffer::getFile(RRJson, /* isText */ true,
                             /* RequiresNullTerminator */ true);
 
   Expected<json::Value> JsonInfo = json::parse(KernelInfoMB.get()->getBuffer());
   if (auto Err = JsonInfo.takeError())
     report_fatal_error("Cannot parse the kernel info json file");
 
-  json::Object *RecordInfo = JsonInfo->getAsObject()->getObject("kernels");
+  std::string VAAddrStr =
+      JsonInfo->getAsObject()->getString("StartVAAddr")->str();
+  uintptr_t StartVAAddr = std::stoull(VAAddrStr, nullptr, 16);
+  auto TotalSize = JsonInfo->getAsObject()->getInteger("TotalSize");
+  if (!TotalSize)
+    report_fatal_error("Cannot read TotalSize value");
+
+  uint64_t VASize = *TotalSize;
+
+  MemoryManager MemManager(VASize, (void *)StartVAAddr);
+
+  if (MemManager.StartVAAddr() != StartVAAddr)
+    report_fatal_error("Could not reserve the requested address range");
+
+  json::Object *RecordInfo = JsonInfo->getAsObject()->getObject("Kernels");
   json::Value *Info = RecordInfo->get(KernelName);
   if (Info == nullptr) {
     report_fatal_error("Requested function does not have a record entry");
@@ -335,16 +430,16 @@ int main(int argc, char *argv[]) {
   std::string iDeviceMemory(KernelInfo.getString("InputData")->str());
   std::string oDeviceMemory(KernelInfo.getString("OutputData")->str());
 
-  dim3 gridDim = getDim3(KernelInfo, "Grid");
-  dim3 blockDim = getDim3(KernelInfo, "Block");
+  dim3 gridDim = getDim3(KernelInfo, "Grid", gridDimx, gridDimy, gridDimz);
+  dim3 blockDim = getDim3(KernelInfo, "Block", blockDimx, blockDimy, blockDimz);
   size_t SharedMem = *KernelInfo.getInteger("SharedMemory");
 
   // Load Kernel Input
-  BinarySnapshot input = BinarySnapshot::Load(iDeviceMemory);
-  BinarySnapshot output = BinarySnapshot::Load(oDeviceMemory);
+  BinarySnapshot input = BinarySnapshot::Load(MemManager, iDeviceMemory);
+  BinarySnapshot output = BinarySnapshot::Load(MemManager, oDeviceMemory);
   input.AllocateDevice(true);
 
-  json::Array *RecordedModules = JsonInfo->getAsObject()->getArray("modules");
+  json::Array *RecordedModules = JsonInfo->getAsObject()->getArray("Modules");
   assert(RecordedModules->size() == 1 &&
          "Record replay does not support multiple modules");
   auto moduleFN = RecordedModules->front().getAsString();
@@ -361,6 +456,10 @@ int main(int argc, char *argv[]) {
     report_fatal_error("Could Not load llvm IR");
 
   auto &M = *TIR.get().getModuleUnlocked();
+
+  Function *KernelFunc = M.getFunction(KernelName);
+  AssignLaunchBounds(M, *KernelFunc, MaxThreads, MinBlocks);
+  WriteToFile(M, KernelName + ".after_bounds.bc", SaveTemps);
 
   OptimizeIR(M, 3, DeviceArch);
 

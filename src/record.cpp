@@ -1,7 +1,6 @@
 #include "memory.hpp"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -26,51 +25,19 @@
 #include <utility>
 #include <vector>
 
-#include <filesystem>
-
-#ifdef ENABLE_CUDA
-
 #include "common.hpp"
-
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "macro.hpp"
+#include <filesystem>
 
 using namespace llvm;
 
-#define cudaErrCheck(CALL)                                                     \
-  {                                                                            \
-    cudaError_t err = CALL;                                                    \
-    if (err != cudaSuccess) {                                                  \
-      printf("ERROR @ %s:%d ->  %s\n", __FILE__, __LINE__,                     \
-             cudaGetErrorString(err));                                         \
-      abort();                                                                 \
-    }                                                                          \
-  }
-
-#define DEVICE_FUNC(x) "cuda" x
-#define PREFIX_UU(x) __cuda##x
-#define PREFIX(x) cuda##x
-
+#ifdef ENABLE_CUDA
+#include <cuda.h>
+#include <cuda_runtime.h>
 #elif defined(ENABLE_HIP)
-
 #include <hip/hip_runtime.h>
-
-#define DEVICE_FUNC(x) "hip" x
-#define PREFIX_UU(x) __hip##x
-#define PREFIX(x) hip##x
-
 #else
 #error "Must define ENABLE_CUDA or ENABLE_HIP when building"
-#endif
-
-#ifdef ENABLE_DEBUG
-#define DEBUG(x) x
-#else
-#define DEBUG(x)
-#endif
-
-#if ENABLE_REPLAY_OPT
-#include "replay_opt.hpp"
 #endif
 
 // Overloaded functions
@@ -225,6 +192,7 @@ public:
       std::cout << "Registered Record replay descr";
       OutBC.close();
       llvmIRInfo.dump();
+      std::cout << "One more module file " << extracted_ir_fn << "\n";
       ModuleFiles.push_back(std::move(extracted_ir_fn));
     } else {
       std::cout << "Device Address of Symbol " << SymbolName << " is " << DevPtr
@@ -249,78 +217,6 @@ public:
     RRGlobalsInitialized = true;
   }
 
-  //  for (auto FB : FatBinaries) {
-  //    CUmodule CUMod;
-  //    std::cout << "Trying to open file " << FB.first << "\n";
-  //    auto err = cuModuleLoadFatBinary(&CUMod, FB.first->binary);
-  //    if (err != CUDA_SUCCESS) {
-  //      throw std::runtime_error("Cannot Open Module Binary" +
-  //                               std::to_string(static_cast<int>(err)));
-  //    }
-  //    // Every module can have a single IR dump.
-  //    SmallVector<std::string, 8> ModuleFNames;
-  //    std::string ModuleName("");
-  //    for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end();) {
-  //      if (GM->first.find("_record_replay_func_info_") != std::string::npos)
-  //      {
-  //        auto hfuncData = loadSymbolToHost<uint64_t>(CUMod, GM->first);
-  //        auto FuncName = std::regex_replace(
-  //            GM->first, std::regex("_record_replay_func_info_"), "");
-
-  //        std::cout << "Adding: " << FuncName << "\n";
-  //        ArgsInfo[FuncName] = hfuncData;
-  //        ArgsInfo[FuncName].dump(true);
-  //        ModuleFNames.push_back(FuncName);
-  //        // We erase here. This is not a global we would like to track
-  //        GM = GlobalsMap.erase(GM);
-  //      } else if (GM->first.find("_record_replay_descr_") !=
-  //                 std::string::npos) {
-  //        ModuleName = std::regex_replace(
-  //            GM->first, std::regex("_record_replay_descr_"), "");
-  //        std::cout << "Found record replay description\n";
-  //        auto llvmIR = loadSymbolToHost<uint8_t>(CUMod, GM->first);
-  //        std::error_code EC;
-  //        std::string rrBC(Twine(ModuleName, ".bc").str());
-  //        raw_fd_ostream OutBC(rrBC, EC);
-  //        if (EC)
-  //          throw std::runtime_error("Cannot open device code " + rrBC);
-  //        OutBC << StringRef(reinterpret_cast<const char *>(llvmIR.h_ptr),
-  //                           llvmIR.elements);
-  //        std::cout << "Registered Record replay descr";
-  //        OutBC.close();
-  //        llvmIR.dump();
-  //        // We erase here. This is not a global we would like to track
-  //        GM = GlobalsMap.erase(GM);
-  //      } else {
-  //        CUdeviceptr DevPtr;
-  //        size_t Bytes;
-  //        if (cuModuleGetGlobal(&DevPtr, &Bytes, CUMod, GM->first.c_str()) !=
-  //            CUDA_SUCCESS)
-  //          throw std::runtime_error("Cannot load Global " + GM->first +
-  //          "\n");
-  //        std::cout << "Device Address of Symbol " << GM->first << " is "
-  //                  << (void *)DevPtr << " with size: " << Bytes << "\n";
-
-  //        TrackedGlobalVars.emplace(
-  //            GM->first,
-  //            std::move(GlobalVar(GM->first, Bytes, (void *)DevPtr)));
-  //        GM++;
-  //      }
-
-  //      // Empty means there was a module that was not instrumented with our
-  //      // pass
-  //      if (!ModuleName.empty()) {
-  //        json::Array FNames;
-  //        for (auto F : ModuleFNames) {
-  //          FNames.push_back(std::move(F));
-  //        }
-  //        FuncsInModules[ModuleName] = json::Value(std::move(FNames));
-  //      }
-  //    }
-  //  }
-  //  RRGlobalsInitialized = true;
-  //}
-
   // Contains name of global and respective size;
   std::unordered_map<std::string, std::pair<size_t, const char *>> GlobalsMap;
 
@@ -334,13 +230,15 @@ public:
       FatBinaries;
 
   std::unordered_map<std::string, HostFuncInfo> ArgsInfo;
-  std::unordered_map<const void *, MappedAlloc> devMemory;
   json::Object RecordedKernels;
   json::Array ModuleFiles;
 
   const std::filesystem::path &getDataStoreDir() const {
     return record_replay_dir;
   }
+
+public:
+  MemoryManager *MemManager;
 
 private:
   void *device_runtime_handle;
@@ -351,6 +249,7 @@ private:
   std::filesystem::path record_replay_dir;
 
   Wrapper() {
+    MemManager = nullptr;
 #ifdef ENABLE_CUDA
     device_runtime_handle = dlopen("libcudart.so", RTLD_NOW);
 #else
@@ -379,12 +278,6 @@ private:
     reinterpret_cast<void *&>(__deviceRegisterVarInternal) =
         dlsym(device_runtime_handle, "__" DEVICE_FUNC("RegisterVar"));
     assert(__deviceRegisterVarInternal && "Expected non-null");
-    reinterpret_cast<void *&>(__deviceRegisterFatBinaryInternal) =
-        dlsym(device_runtime_handle, "__" DEVICE_FUNC("RegisterFatBinary"));
-    assert(__deviceRegisterFatBinaryInternal && "Expected non-null");
-    reinterpret_cast<void *&>(__deviceRegisterFatBinaryEndInternal) =
-        dlsym(device_runtime_handle, "__" DEVICE_FUNC("RegisterFatBinaryEnd"));
-    assert(__deviceRegisterFatBinaryEndInternal && "Expected non-null");
 
     reinterpret_cast<void *&>(__deviceRegisterFunctionInternal) =
         dlsym(device_runtime_handle, "__" DEVICE_FUNC("RegisterFunction"));
@@ -468,32 +361,47 @@ private:
   }
 
   ~Wrapper() {
+    if (!MemManager)
+      return;
+
+    uintptr_t startAddr = MemManager->StartVAAddr();
+    uint64_t totalSize = MemManager->TotalVASize();
+
     auto JsonFilename = record_replay_dir / record_replay_fn;
     std::error_code EC;
     json::Object record;
-    record["kernels"] = json::Value(std::move(RecordedKernels));
-    record["modules"] = json::Value(
+    std::ostringstream oss;
+    oss << std::hex << startAddr;
+
+    record["StartVAAddr"] = json::Value(oss.str());
+    record["TotalSize"] = json::Value(totalSize);
+    record["Kernels"] = json::Value(std::move(RecordedKernels));
+    record["Modules"] = json::Value(
         std::move(ModuleFiles)); // json::Value(std::move(FuncsInModules));
     raw_fd_ostream JsonOS(JsonFilename.string(), EC);
     JsonOS << json::Value(std::move(record));
     JsonOS.close();
+
+    if (MemManager) {
+      delete MemManager;
+      MemManager = nullptr;
+    }
   }
 };
 
 // Overload implementations.
 extern "C" {
 
-void PREFIX_UU(RegisterFatBinaryEnd)(void *ptr) {
-  Wrapper *W = Wrapper::instance();
-  return __deviceRegisterFatBinaryEndInternal(ptr);
-}
-
-void *PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
-  Wrapper *W = Wrapper::instance();
-  void *ret = __deviceRegisterFatBinaryInternal(fatCubin);
-  std::cout << "Intercepted fatbinary handle " << ret << "\n";
-  return ret;
-}
+// void PREFIX_UU(RegisterFatBinaryEnd)(void *ptr) {
+//   Wrapper *W = Wrapper::instance();
+//   __deviceRegisterFatBinaryEndInternal(ptr);
+//   return;
+// }
+//
+// void **PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
+//   Wrapper *W = Wrapper::instance();
+//   return __deviceRegisterFatBinaryInternal(fatCubin);
+// }
 
 void PREFIX_UU(RegisterVar)(void **fatCubinHandle, char *hostVar,
                             char *deviceAddress, const char *deviceName,
@@ -539,22 +447,23 @@ void *suggestAddr() {
   // insignficant results
   void *ptr;
   cudaErrCheck(deviceMallocInternal(&ptr, 1024));
-  std::cout << "Allocated address " << ptr << "\n";
+  std::cout << "Suggested Address " << std::hex << ptr << "\n";
   cudaErrCheck(deviceFreeInternal(ptr));
   return ptr;
 }
 
 PREFIX(Error_t) PREFIX(Malloc)(void **ptr, size_t size) {
-  static void *initialAddr = nullptr;
-  if (!initialAddr)
-    initialAddr = suggestAddr();
+  static long count = 0;
 
   Wrapper *W = Wrapper::instance();
-  size_t actual_size;
-  auto ret = memory::cuda::MemMapToDevice(ptr, initialAddr, size, actual_size);
-  initialAddr = *ptr;
-  initialAddr = (void *)((intptr_t)(initialAddr) + actual_size);
-  W->devMemory[*ptr] = {actual_size, size, ret};
+  if (W->MemManager == nullptr) {
+    void *initialAddr = suggestAddr();
+    std::cout << "Initializing memory manager\n";
+    W->MemManager =
+        new MemoryManager(12L * 1024L * 1024L * 1024L, initialAddr, 0);
+    std::cout << "Done \n";
+  }
+  *ptr = W->MemManager->allocate(size);
   return PREFIX(Success);
 }
 
@@ -573,11 +482,9 @@ PREFIX(MallocManaged)(void **ptr, size_t size, unsigned int flags) {
 
 PREFIX(Error_t) PREFIX(Free)(void *devPtr) {
   Wrapper *W = Wrapper::instance();
-  assert(W->devMemory.find(devPtr) != W->devMemory.end() &&
-         "Call Free on device memory that is not being tracked");
-  memory::cuda::MemoryUnMap(devPtr, W->devMemory[devPtr].handle,
-                            W->devMemory[devPtr].actual_size);
-  W->devMemory.erase(devPtr);
+  assert(W->MemManager != nullptr &&
+         "When Freeing memory Memory Manager needs to be initialized\n");
+  W->MemManager->release(devPtr);
   return PREFIX(Success);
 }
 
@@ -630,52 +537,11 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
     ((void *)GV.HostPtr, (void *)GV.DevPtr, GV.Size,
      PREFIX(MemcpyDeviceToHost));
     OutBC << StringRef(reinterpret_cast<const char *>(GV.HostPtr), GV.Size);
-
-    for (int i = 0; i < GV.Size; i++) {
-      std::cout << "Global Value of " << GV.Name << " at address " << GV.DevPtr
-                << " at index " << i
-                << " is : " << (int)((int8_t *)GV.HostPtr)[i] << "\n";
-    }
-
-    std::cout << "Total Bytes written: " << OutBC.tell() << "\n";
   }
-
-  for (auto KV : W->devMemory) {
-    if (maxSize < KV.second.requested_size)
-      maxSize = KV.second.requested_size;
-  }
-
-  if (maxSize == 0)
-    return;
-
-  uint8_t *Buffer = new uint8_t[maxSize];
-  for (auto KV : W->devMemory) {
-    std::cout << "Writing dev Memory: " << KV.first
-              << " of Size: " << KV.second.requested_size << "\n";
-    PREFIX(Memcpy)
-    ((void *)Buffer, (void *)KV.first, KV.second.requested_size,
-     PREFIX(MemcpyDeviceToHost));
-    OutBC << StringRef(reinterpret_cast<const char *>(&KV.first),
-                       sizeof(KV.first));
-    if (EC)
-      throw std::runtime_error("Cannot open device code " + fileName);
-
-    OutBC << StringRef(
-        reinterpret_cast<const char *>(&KV.second.requested_size),
-        sizeof(KV.second.requested_size));
-    if (EC)
-      throw std::runtime_error("Cannot open device code " + fileName);
-
-    OutBC << StringRef(reinterpret_cast<const char *>(Buffer),
-                       KV.second.requested_size);
-    if (EC)
-      throw std::runtime_error("Cannot open device code " + fileName);
-  }
+  OutBC << *W->MemManager;
 
   OutBC.flush();
   OutBC.close();
-
-  delete[] Buffer;
 }
 
 PREFIX(Error_t)

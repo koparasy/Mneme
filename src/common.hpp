@@ -8,10 +8,16 @@
 
 #include "macro.hpp"
 
+namespace util {
 template <typename Ty> inline Ty *advanceVoidPtr(Ty *Ptr, int64_t Offset) {
   static_assert(std::is_void<Ty>::value);
   return const_cast<char *>(reinterpret_cast<const char *>(Ptr) + Offset);
 }
+
+template <typename Ty> Ty RoundUp(Ty Size, Ty Divider) {
+  return (Size + Divider - 1) & ~(Divider - 1);
+}
+} // namespace util
 
 struct GlobalVar {
   std::string Name;

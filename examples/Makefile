@@ -4,7 +4,7 @@ ARCH=sm_70
 all: example llvm
 
 example:
-	clang++  -Wl,-rpath,../build/src/ -L../build/src/ --cuda-gpu-arch=$(ARCH) -I${CUDA_HOME}/include -L${CUDA_HOME}/lib64 example.cu -o example -lcuda -lcudart -lappreplay
+	clang++  -gdwarf-4 -Wl,-rpath,../build/src/ -L../build/src/ --cuda-gpu-arch=$(ARCH) -I${CUDA_HOME}/include -L${CUDA_HOME}/lib64 example.cu -o example -lcuda -lcudart -lappreplay
 
 llvm:
 	clang++ -gdwarf-4 -Wl,-rpath,../build/src/ -L../build/src/ -O3 -save-temps -fpass-plugin=../build/pass/libRRPass.so --cuda-gpu-arch=$(ARCH) -I${CUDA_HOME}/include -L${CUDA_HOME}/lib64 example.cu -o example -lcuda -lcudart -lappreplay

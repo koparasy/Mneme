@@ -35,7 +35,7 @@ int main(int argc, const char *argv[]) {
 
   const int threads = 256;
   int num_blocks = (numElements + threads - 1) / threads;
-  vecAdd<<< num_blocks, threads>>>(in, out, 1024.0, numElements);
+  vecAdd<<< num_blocks, threads>>>(in, out, val, numElements);
   cudaDeviceSynchronize();
 
   double *h_in = new double[numElements];
@@ -45,7 +45,7 @@ int main(int argc, const char *argv[]) {
   for (int i = 0; i < numElements; i++){
     if (h_in[i] + 1.0 + val != h_out[i]){
       std::cout << "Values at " << i << " differ\n";
-      std::cout << "Values" << h_in[i] << " " << h_out[i] << "differ\n";
+      std::cout << "Values " << h_in[i] << " " << h_out[i] << "differ\n";
       return -1;
     }
   }
