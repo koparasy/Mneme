@@ -255,6 +255,7 @@ void deviceInstrumentation(Module &M) {
   std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
   std::replace(IRName.begin(), IRName.end(), '.', '_');
   std::replace(IRName.begin(), IRName.end(), '/', '_');
+  std::replace(IRName.begin(), IRName.end(), '-', '_');
 
   auto *GVIR = new GlobalVariable(M, ModuleIRTy, true,
                                   GlobalValue::PrivateLinkage, CS, IRName);
@@ -411,60 +412,28 @@ FunctionType *getRRRuntimeCallFnTy(Module &M) {
   return RREntryFn;
 }
 
-void RegisterFatBinary(Module &M) {
-#if ENABLE_HIP
-  assert(false && "Pending implementation");
-#elif ENABLE_CUDA
-  Function *RegisterFatBinaryFn = M.getFunction("__cudaRegisterFatBinary");
-#else
-#error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
-#endif
-
-  if (RegisterFatBinaryFn) {
-    for (User *Usr : RegisterFatBinaryFn->users()) {
-      if (CallBase *CB = dyn_cast<CallBase>(Usr)) {
-        errs() << "CallBack\n";
-        errs() << *CB << "\n";
-        IRBuilder<> Builder(CB->getNextNonDebugInstruction());
-        auto *FatBin = getFatBinWrapper(M);
-        size_t FatBinSize = getFatBinSize(M, FatBin);
-        FunctionType *RRFnTy = getRRRuntimeCallFnTy(M);
-        FunctionCallee RRFn =
-            M.getOrInsertFunction("__rr_register_fat_binary", RRFnTy);
-        Builder.CreateCall(RRFn, {FatBin, Builder.getInt64(FatBinSize)});
-        // Once we insert a register we can break. There is a single
-        // registration per translation unit.
-        // TODO: Verify this in the case of multiple device files
-        break;
-      }
-    }
-  }
-}
-
 void RegisterLLVMIRVariable(Module &M) {
 #if ENABLE_HIP
   assert(false && "Pending implementation");
 #elif ENABLE_CUDA
-  Function *RegisterFatBinaryFn = M.getFunction("__cudaRegisterFatBinary");
+  Function *RegisterGlobalsFn = M.getFunction("__cuda_register_globals");
 #else
 #error "Expected ENABLE_HIP or ENABLE_CUDA to be defined"
 #endif
 
-  if (RegisterFatBinaryFn) {
-    for (User *Usr : RegisterFatBinaryFn->users()) {
-      if (CallBase *CB = dyn_cast<CallBase>(Usr)) {
-        std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
-        // I need to do this, cause ptxas does not like '.' and we cannot find
-        // the respective symbols
-        std::replace(IRName.begin(), IRName.end(), '.',
-                     '_'); // replace all 'x' to 'y'
-                           //
-        std::replace(IRName.begin(), IRName.end(), '/', '_');
-        RegisterGlobalVariable(M, CB, CB->getNextNonDebugInstruction(), IRName);
-
-        break;
-      }
-    }
+  if (RegisterGlobalsFn) {
+    Instruction &Entry = RegisterGlobalsFn->getEntryBlock().front();
+    std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
+    // I need to do this, cause ptxas does not like '.' and we cannot find
+    // the respective symbols
+    std::replace(IRName.begin(), IRName.end(), '.',
+                 '_'); // replace all 'x' to 'y'
+                       //
+    std::replace(IRName.begin(), IRName.end(), '/', '_');
+    std::replace(IRName.begin(), IRName.end(), '-', '_');
+    Value *FatBinHandle = RegisterGlobalsFn->getArg(0);
+    RegisterGlobalVariable(M, FatBinHandle, Entry.getNextNonDebugInstruction(),
+                           IRName);
   }
 }
 
@@ -476,9 +445,10 @@ void hostInstrumentation(Module &M) {
   }
   // We register all device globals so that we can access them.
   auto KernelNameMap = InstantiateGlobalVariables(M);
-
-  RegisterLLVMIRVariable(M);
-  RegisterFatBinary(M);
+  Function *RegisterFunction = M.getFunction("__cudaRegisterFunction");
+  Function *RegisterVars = M.getFunction("__cudaRegisterVar");
+  if (RegisterFunction->getNumUses() != 0 || RegisterVars->getNumUses() != 0)
+    RegisterLLVMIRVariable(M);
 
   std::filesystem::path filename(M.getSourceFileName());
   std::string rrBC(Twine(filename.filename().string(), ".host-rr.bc").str());

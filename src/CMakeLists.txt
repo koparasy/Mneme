@@ -24,6 +24,3 @@ target_include_directories(replay PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(replay PRIVATE LLVM CUDA::cudart CUDA::cuda_driver)
 target_compile_definitions(replay PRIVATE -DENABLE_CUDA -DENABLE_DEBUG ${LLVM_DEFINITIONS})
 target_compile_definitions(replay PRIVATE )
-
-
-add_library(appreplay SHARED libreplayapp.cpp)
