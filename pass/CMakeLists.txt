@@ -10,8 +10,6 @@ endif()
 
 llvm_map_components_to_libnames(llvm_libs all)
 
-message(WARNING "LIBS: ${llvm_libs}")
-
 target_link_libraries(RRPass PRIVATE ${llvm_libs})
 target_include_directories(RRPass PRIVATE "${PROJECT_SOURCE_DIR}/src")
 

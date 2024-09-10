@@ -26,10 +26,7 @@ target_compile_definitions(replay PRIVATE -DENABLE_CUDA -DENABLE_DEBUG ${LLVM_DE
 target_compile_definitions(replay PRIVATE )
 
 set_target_properties(replay PROPERTIES
-  INSTALL_RPATH "${LLVM_LIBRARY_DIR}"
-    # If you want to use RPATH during build time as well, enable the following
-  BUILD_WITH_INSTALL_RPATH TRUE
-)
+  INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
 
 install(TARGETS replay)
 
