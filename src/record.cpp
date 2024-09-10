@@ -505,8 +505,9 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
   std::error_code EC;
   raw_fd_ostream OutBC(fileName, EC);
   Wrapper *W = Wrapper::instance();
-  if (EC)
-    throw std::runtime_error("Cannot open device code " + fileName);
+  if (EC) {
+    throw std::runtime_error("File Error : " + EC.message());
+  }
   size_t maxSize = 0;
   size_t overhead = 0;
   size_t bytes = 0;
@@ -561,6 +562,7 @@ PREFIX(LaunchKernel)
 (const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem,
  PREFIX(Stream_t) stream) {
   Wrapper *W = Wrapper::instance();
+  std::hash<std::string> hasher;
   std::string func_name = W->SymbolTable[func].first;
   PREFIX(Error_t) ret;
 
@@ -591,8 +593,11 @@ PREFIX(LaunchKernel)
   Block["y"] = blockDim.y;
   Block["z"] = blockDim.z;
 
-  auto iDataFn = W->getDataStoreDir() /
-                 Twine("Before" + W->SymbolTable[func].first + ".bin").str();
+  auto iDataFn =
+      W->getDataStoreDir() /
+      Twine("Before" + std::to_string(hasher(W->SymbolTable[func].first)) +
+            ".bin")
+          .str();
 
   dumpDeviceMemory(iDataFn.string(), func_info, args, W->TrackedGlobalVars);
   func_info.dump(true);
@@ -609,8 +614,11 @@ PREFIX(LaunchKernel)
   // stream. I am hesitant for this. Multi-stream execution can potentially
   // modify the device memory as we copy the data.
   PREFIX(DeviceSynchronize());
-  auto oDataFn = W->getDataStoreDir() /
-                 Twine("After" + W->SymbolTable[func].first + ".bin").str();
+  auto oDataFn =
+      W->getDataStoreDir() /
+      Twine("After" + std::to_string(hasher(W->SymbolTable[func].first)) +
+            ".bin")
+          .str();
   KernelInfo["OutputData"] = oDataFn.string();
 
   func_info.dump(true);

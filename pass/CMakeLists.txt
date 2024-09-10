@@ -1,4 +1,5 @@
 add_library(RRPass SHARED RRPass.cpp)
+add_library(RR::Pass ALIAS RRPass)
 
 target_include_directories(RRPass
   SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
@@ -14,4 +15,9 @@ message(WARNING "LIBS: ${llvm_libs}")
 target_link_libraries(RRPass PRIVATE ${llvm_libs})
 target_include_directories(RRPass PRIVATE "${PROJECT_SOURCE_DIR}/src")
 
-install(TARGETS RRPass)
+install(TARGETS RRPass EXPORT RR 
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+    INCLUDES DESTINATION include)
+

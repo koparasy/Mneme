@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(RecordReplay
+project(RR
   VERSION 0.1.0
   LANGUAGES C CXX)
 
@@ -34,6 +34,7 @@ option(ENABLE_TESTS "Enable Testing" OFF)
 
 set(LLVM_VERSION "17" CACHE STRING "LLVM version")
 
+include(CMakePackageConfigHelpers)
 
 if(ENABLE_CUDA)
   enable_language(CUDA)
