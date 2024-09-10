@@ -61,9 +61,10 @@ MemoryBlob::MemoryBlob(MemoryBlob &&other) noexcept
 void *ReserveVirtualAddress(void *req_addr, uint64_t VASize,
                             uint64_t PageSize) {
   CUdeviceptr devPtr = 0;
-  std::cout << "Requesting VASize "
-            << (double)((double)VASize / (1024L * 1024L * 1024L))
-            << " at Address " << std::hex << req_addr << "\n";
+  DEBUG(std::cout << "Requesting VASize "
+                  << (double)((double)VASize / (1024L * 1024L * 1024L))
+                  << " at Address " << std::hex << req_addr << std::dec
+                  << "\n";)
   cuErrCheck(cuMemAddressReserve(&devPtr, VASize, PageSize,
                                  reinterpret_cast<CUdeviceptr>(req_addr), 0));
   return (void *)devPtr;
@@ -198,7 +199,7 @@ PageManager::ReserveBestFitPage(uint64_t VASize) {
 std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
                                                              void *VA) {
   // We need to always reserve at least a single page
-  std::cout << "Requesting exact page\n";
+  DEBUG(std::cout << "Requesting exact page\n";)
   uint64_t ReqSize = util::RoundUp(VASize, PageSize);
   auto FreeNode = findInclusivePage((uintptr_t)VA, ReqSize);
   if (FreeNode == FreeVARanges.end())
@@ -207,8 +208,8 @@ std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
   auto Ptr = FreeNode->PageAddr;
   auto NodePageSize = FreeNode->Size;
 
-  std::cout << "Returned start: " << std::hex << Ptr << " End: " << std::hex
-            << Ptr + NodePageSize << "\n";
+  DEBUG(std::cout << "Returned start: " << std::hex << Ptr << " End: "
+                  << std::hex << Ptr + NodePageSize << std::dec << "\n";)
 
   FreeVARanges.erase(FreeNode);
 
@@ -223,7 +224,7 @@ std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
       oss << "Unable to return requested address: " << std::hex
           << reinterpret_cast<uintptr_t>(VA)
           << " instead the returned address is " << std::hex
-          << reinterpret_cast<uintptr_t>(Ptr) << "\n";
+          << reinterpret_cast<uintptr_t>(Ptr) << std::dec << "\n";
       throw std::runtime_error(oss.str());
     }
   }
@@ -261,17 +262,20 @@ PageManager::PageManager(uint64_t VASize, void *VA, int32_t device_id) {
   TotalVASize = util::RoundUp(VASize, PageSize);
   ReservedVA = (uintptr_t)gpu::ReserveVirtualAddress(VA, TotalVASize, PageSize);
 
-  std::cout << "Reserved Address Ranges : " << std::hex << ReservedVA
-            << " of size " << ((double)TotalVASize) / (1024 * 1024) << "MB"
-            << " " << TotalVASize << " PageSize: " << PageSize / 1024.0 << "\n";
+  DEBUG(std::cout << "Reserved Address Ranges : " << std::hex << ReservedVA
+                  << std::dec << " of size "
+                  << ((double)TotalVASize) / (1024 * 1024) << "MB"
+                  << " " << TotalVASize << " PageSize: " << PageSize / 1024.0
+                  << "\n";)
   FreeVARanges.insert(ContiguousAddrBlock{ReservedVA, TotalVASize});
 }
 
 PageManager::~PageManager() {
-  std::cout << "Releasing Reserved VA Memory\n";
-  std::cout << "ReservedVA is " << std::hex << ReservedVA << "\n";
-  std::cout << "Total Size is " << ((double)TotalVASize / (1024.0 * 1024.0))
-            << " MB\n";
+  DEBUG(std::cout << "Releasing Reserved VA Memory\n";)
+  DEBUG(std::cout << "ReservedVA is " << std::hex << ReservedVA << std::dec
+                  << "\n";)
+  DEBUG(std::cout << "Total Size is "
+                  << ((double)TotalVASize / (1024.0 * 1024.0)) << " MB\n";)
   cuErrCheck(cuMemAddressFree(ReservedVA, TotalVASize));
 }
 
@@ -313,16 +317,18 @@ void *MemoryManager::allocate(uint64_t size, void *req_addr) {
           << reinterpret_cast<uintptr_t>(req_addr) << "With size: " << size
           << " memory manager returned address [Low:" << std::hex
           << Blob.BlobAddr << ", High:" << std::hex << Blob.BlobAddr + Blob.Size
-          << "]\n";
+          << std::dec << "]\n";
       throw std::runtime_error(oss.str());
     }
 
     AllocatedMemory.emplace(req_addr, std::move(Blob));
-    std::cout << "Returning addr " << std::hex << (uintptr_t)req_addr << "\n";
+    DEBUG(std::cout << "Returning addr " << std::hex << (uintptr_t)req_addr
+                    << std::dec << "\n";)
     return req_addr;
   }
   AllocatedMemory.emplace(Addr, std::move(Blob));
-  std::cout << "Returning addr " << std::hex << (uintptr_t)Addr << "\n";
+  DEBUG(std::cout << "Returning addr " << std::hex << (uintptr_t)Addr
+                  << std::dec << "\n";)
   return Addr;
 }
 
@@ -331,7 +337,7 @@ void MemoryManager::release(void *addr) {
   if (Blob == AllocatedMemory.end()) {
     std::ostringstream oss;
     oss << "Released Memory " << std::hex << reinterpret_cast<uintptr_t>(addr)
-        << " is not tracked by memory manager\n";
+        << std::dec << " is not tracked by memory manager\n";
     throw std::runtime_error(oss.str());
   }
   Blob->second.release();
@@ -355,8 +361,8 @@ llvm::raw_fd_ostream &operator<<(llvm::raw_fd_ostream &os,
 
   uint8_t *Buffer = new uint8_t[maxSize];
   for (auto &KV : MemManager.AllocatedMemory) {
-    std::cout << "[MemoryManager] Writing dev Memory: " << KV.first
-              << " of Size: " << (uint64_t)KV.second.Size << "\n";
+    DEBUG(std::cout << "[MemoryManager] Writing dev Memory: " << KV.first
+                    << " of Size: " << (uint64_t)KV.second.Size << "\n";)
     PREFIX(Memcpy)
     ((void *)Buffer, (void *)KV.first, KV.second.Size,
      PREFIX(MemcpyDeviceToHost));
