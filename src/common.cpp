@@ -78,19 +78,17 @@ void GlobalVar::copyFromDevice() {
 bool GlobalVar::compare(GlobalVar &other) {
   if (Size != other.Size)
     return false;
-  // std::cout << "Sizes are equal\n";
+
   if (Name != other.Name)
     return false;
-
-  // std::cout << "Names are the same '" << other.Name << "'\n";
 
   if (std::memcmp(HostPtr, other.HostPtr, Size) != 0) {
     int8_t *host_ptr = (int8_t *)HostPtr;
     int8_t *ohost_ptr = (int8_t *)other.HostPtr;
     for (int i = 0; i < Size; i++) {
-      std::cout << "Global Mem at address " << DevPtr << " at index:" << i
-                << " has the value of " << (int)host_ptr[i] << " versus "
-                << (int)ohost_ptr[i] << "\n";
+      DEBUG(std::cout << "Global Mem at address " << DevPtr << " at index:" << i
+                      << " has the value of " << (int)host_ptr[i] << " versus "
+                      << (int)ohost_ptr[i] << "\n";)
     }
     return false;
   }

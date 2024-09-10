@@ -3,6 +3,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <llvm/IR/Constants.h>
 #include <stdexcept>
@@ -35,13 +36,13 @@ static cl::opt<long>
 
 static cl::opt<long>
     blockDimy("blockDimy",
-              cl::desc("The number of threads on x dimension to "
+              cl::desc("The number of threads on y dimension to "
                        "assign to a block during kernel replay"),
               cl::init(-1), cl::cat(ReplayCategory));
 
 static cl::opt<long>
     blockDimz("blockDimz",
-              cl::desc("The number of threads on x dimension to "
+              cl::desc("The number of threads on z dimension to "
                        "assign to a block during kernel replay"),
               cl::init(-1), cl::cat(ReplayCategory));
 
@@ -53,13 +54,13 @@ static cl::opt<long>
 
 static cl::opt<long>
     gridDimy("gridDimy",
-             cl::desc("The number of threads on x dimension to "
+             cl::desc("The number of threads on y dimension to "
                       "assign to a grid during kernel replay"),
              cl::init(-1), cl::cat(ReplayCategory));
 
 static cl::opt<long>
     gridDimz("gridDimz",
-             cl::desc("The number of threads on x dimension to "
+             cl::desc("The number of threads on z dimension to "
                       "assign to a grid during kernel replay"),
              cl::init(-1), cl::cat(ReplayCategory));
 
@@ -68,11 +69,11 @@ static cl::opt<std::string>
                cl::Required, cl::cat(ReplayCategory));
 
 static cl::opt<int> MaxThreads("max-threads",
-                               cl::desc("Assing MaxThreads Launchbound"),
+                               cl::desc("Passing MaxThreads Launchbound"),
                                cl::init(-1), cl::cat(ReplayCategory));
 
 static cl::opt<int> MinBlocks("min-blocks",
-                              cl::desc("Assing MinBlocks Launchbound"),
+                              cl::desc("Passing MinBlocks Launchbound"),
                               cl::init(-1), cl::cat(ReplayCategory));
 
 static cl::opt<bool> SaveTemps("save-temps",
@@ -145,8 +146,8 @@ public:
   MemoryBlob &operator=(const MemoryBlob &) = delete;
 
   void dump() const {
-    std::cout << "MemSize: " << MemSize << " Mapped: " << Mapped
-              << " Copied: " << Copied << "\n";
+    DEBUG(std::cout << "MemSize: " << MemSize << " Mapped: " << Mapped
+                    << " Copied: " << Copied << "\n";)
   }
 
   void copyToDevice() {
@@ -211,7 +212,7 @@ public:
     const void *StartPtr = BufferPtr;
     uint64_t num_args = (*(uint64_t *)BufferPtr);
     BufferPtr = util::advanceVoidPtr(BufferPtr, sizeof(uint64_t));
-    std::cout << "Read " << num_args << " arguments\n";
+    DEBUG(std::cout << "Read " << num_args << " arguments\n";)
     std::vector<uint64_t> arg_sizes;
     for (int i = 0; i < num_args; i++) {
       arg_sizes.push_back(*(uint64_t *)BufferPtr);
@@ -234,8 +235,8 @@ public:
       GlobalVar global_variable(&BufferPtr);
       MemState.TrackedGlobalVars.emplace(global_variable.Name,
                                          std::move(global_variable));
-      std::cout << "Total Bytes read: "
-                << (uintptr_t)BufferPtr - (uintptr_t)StartPtr << "\n";
+      DEBUG(std::cout << "Total Bytes read: "
+                      << (uintptr_t)BufferPtr - (uintptr_t)StartPtr << "\n";)
     }
 
     for (auto &GV : MemState.TrackedGlobalVars) {
@@ -252,7 +253,6 @@ public:
 
       MemState.DeviceBlobs.emplace(
           dPtr, MemoryBlob(MemManager, (void *)BufferPtr, memBlobSize));
-      std::cout << "I just added :\n";
       auto it = MemState.DeviceBlobs.find(dPtr);
       if (it != MemState.DeviceBlobs.end()) {
         it->second.dump();
@@ -380,13 +380,17 @@ std::pair<std::string, CUdevice> init() {
 
 dim3 getDim3(json::Object &Info, std::string key, long opt_x, long opt_y,
              long opt_z) {
-  std::cout << "Opt X " << opt_x << "\n";
-  std::cout << "Opt Y " << opt_y << "\n";
-  std::cout << "Opt Z " << opt_z << "\n";
   auto JObject = Info.getObject(key);
   long x = (opt_x == -1) ? *JObject->getInteger("x") : opt_x;
   long y = (opt_y == -1) ? *JObject->getInteger("y") : opt_y;
   long z = (opt_z == -1) ? *JObject->getInteger("z") : opt_z;
+
+  std::cout << "Recorded " << key << " configuration: ("
+            << *JObject->getInteger("x") << ", " << *JObject->getInteger("y")
+            << ", " << *JObject->getInteger("z") << ")\n";
+  std::cout << "Replay " << key << " configuration: (" << x << ", " << y << " ,"
+            << z << ")\n";
+
   return dim3(x, y, z);
 }
 
@@ -397,6 +401,11 @@ int main(int argc, char *argv[]) {
   auto DeviceSpec = init();
   std::string DeviceArch = DeviceSpec.first;
 
+  if (!std::filesystem::exists(RRJson.getValue())) {
+    std::cerr << "Record-Replay JSON File " << RRJson << " does not exist!"
+              << std::endl;
+    return 1;
+  }
   // Load JSON File
   ErrorOr<std::unique_ptr<MemoryBuffer>> KernelInfoMB =
       MemoryBuffer::getFile(RRJson, /* isText */ true,
@@ -406,10 +415,22 @@ int main(int argc, char *argv[]) {
   if (auto Err = JsonInfo.takeError())
     report_fatal_error("Cannot parse the kernel info json file");
 
-  std::string VAAddrStr =
-      JsonInfo->getAsObject()->getString("StartVAAddr")->str();
+  auto JSONRoot = JsonInfo->getAsObject();
+  json::Value *VAAddrValue = JSONRoot->get("StartVAAddr");
+  if (VAAddrValue == nullptr) {
+    std::cerr << "JSON file does not contain Starting VA field (StartVAAddr)\n";
+    return 1;
+  }
+
+  std::string VAAddrStr = VAAddrValue->getAsString()->str();
   uintptr_t StartVAAddr = std::stoull(VAAddrStr, nullptr, 16);
-  auto TotalSize = JsonInfo->getAsObject()->getInteger("TotalSize");
+  json::Value *TotalSizeValue = JSONRoot->get("TotalSize");
+  if (TotalSizeValue == nullptr) {
+    std::cerr << "JSON file does not contain Total VA Size (TotalSize) field\n";
+    return 1;
+  }
+
+  auto TotalSize = TotalSizeValue->getAsUINT64();
   if (!TotalSize)
     report_fatal_error("Cannot read TotalSize value");
 
@@ -420,7 +441,7 @@ int main(int argc, char *argv[]) {
   if (MemManager.StartVAAddr() != StartVAAddr)
     report_fatal_error("Could not reserve the requested address range");
 
-  json::Object *RecordInfo = JsonInfo->getAsObject()->getObject("Kernels");
+  json::Object *RecordInfo = JSONRoot->getObject("Kernels");
   json::Value *Info = RecordInfo->get(KernelName);
   if (Info == nullptr) {
     report_fatal_error("Requested function does not have a record entry");
@@ -428,9 +449,21 @@ int main(int argc, char *argv[]) {
   json::Object KernelInfo = *Info->getAsObject();
 
   std::string iDeviceMemory(KernelInfo.getString("InputData")->str());
-  std::string oDeviceMemory(KernelInfo.getString("OutputData")->str());
+  if (!std::filesystem::exists(iDeviceMemory)) {
+    std::cerr << "Record-Replay JSON File " << iDeviceMemory
+              << " does not exist!" << std::endl;
+    return 1;
+  }
 
-  dim3 gridDim = getDim3(KernelInfo, "Grid", gridDimx, gridDimy, gridDimz);
+  std::string oDeviceMemory(KernelInfo.getString("OutputData")->str());
+  if (!std::filesystem::exists(oDeviceMemory)) {
+    std::cerr << "Record-Replay JSON File " << oDeviceMemory
+              << " does not exist!" << std::endl;
+    return 1;
+  }
+
+  dim3 gridDim = getDim3(KernelInfo, "Grid", gridDimx.getValue(),
+                         gridDimy.getValue(), gridDimz.getValue());
   dim3 blockDim = getDim3(KernelInfo, "Block", blockDimx, blockDimy, blockDimz);
   size_t SharedMem = *KernelInfo.getInteger("SharedMemory");
 

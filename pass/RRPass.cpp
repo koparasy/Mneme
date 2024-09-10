@@ -22,9 +22,9 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Object/ELF.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/Debug.h"
@@ -33,7 +33,6 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/StripDeadPrototypes.h"
-#include "llvm/Transforms/IPO/StripSymbols.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <llvm/ADT/StringRef.h>
@@ -57,6 +56,8 @@
 #include <iostream>
 #include <string>
 #include <utility>
+
+#include "macro.hpp"
 
 using namespace llvm;
 
@@ -184,13 +185,6 @@ void deviceInstrumentation(Module &M) {
     RRFunctionInfoMap.insert({F, RRInfo});
   }
 
-  for (auto KV : RRFunctionInfoMap) {
-    dbgs() << "Function " << KV.first->getName() << "\n";
-    for (auto S : KV.second) {
-      dbgs() << "Size: " << S << "\n";
-    }
-  }
-
   // Append to the global section the size of every argument of the device
   // function. This will be read by the Record/Replay runtime library to infer
   // the sizes of the copies
@@ -252,7 +246,9 @@ void deviceInstrumentation(Module &M) {
   Constant *CS = ConstantStruct::get(ModuleIRTy, {IRSize, IRPtr});
 
   // The '.' character results in weird ptxas behavior. We replace it.
-  std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
+  std::filesystem::path ModulePath(M.getSourceFileName());
+  std::string IRName =
+      "_record_replay_descr_" + std::filesystem::absolute(ModulePath).string();
   std::replace(IRName.begin(), IRName.end(), '.', '_');
   std::replace(IRName.begin(), IRName.end(), '/', '_');
   std::replace(IRName.begin(), IRName.end(), '-', '_');
@@ -423,7 +419,10 @@ void RegisterLLVMIRVariable(Module &M) {
 
   if (RegisterGlobalsFn) {
     Instruction &Entry = RegisterGlobalsFn->getEntryBlock().front();
-    std::string IRName = "_record_replay_descr_" + M.getSourceFileName();
+
+    std::filesystem::path ModulePath(M.getSourceFileName());
+    std::string IRName = "_record_replay_descr_" +
+                         std::filesystem::absolute(ModulePath).string();
     // I need to do this, cause ptxas does not like '.' and we cannot find
     // the respective symbols
     std::replace(IRName.begin(), IRName.end(), '.',

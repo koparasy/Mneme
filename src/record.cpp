@@ -101,12 +101,12 @@ struct HostFuncInfo {
 
   void dump(bool detail = false) const {
 #ifdef __ENABLE_DEBUG__
-    std::cout << "Host Pointer: " << h_ptr;
-    std::cout << " Device Pointer: " << h_ptr;
-    std::cout << " Number of elements: " << elements << "\n";
+    DEBUG(std::cout << "Host Pointer: " << h_ptr;)
+    DEBUG(std::cout << " Device Pointer: " << h_ptr;)
+    DEBUG(std::cout << " Number of elements: " << elements << "\n";)
     if (detail) {
       for (int i = 0; i < elements; i++) {
-        std::cout << "Element [" << i << "]" << h_ptr[i] << "\n";
+        DEBUG(std::cout << "Element [" << i << "]" << h_ptr[i] << "\n";)
       }
     }
 #endif
@@ -122,6 +122,33 @@ public:
     static Wrapper w;
     return &w;
   };
+
+  bool RecordKernel(std::string &KernelName, dim3 &gridDim, dim3 blockDim) {
+
+    long largestThreadID = (gridDim.x * blockDim.x) * (gridDim.y * blockDim.y) *
+                           (gridDim.z * blockDim.z);
+    auto KD = RecordedDims.find(KernelName);
+    // If we have already recorded this kernel we know this is within our
+    // whitelist
+    if (KD != RecordedDims.end()) {
+      if (KD->second < largestThreadID) {
+        return true;
+      }
+      return false;
+    }
+
+    std::string all("all");
+    auto it = std::find(SymbolWhiteList.begin(), SymbolWhiteList.end(), all);
+    if (it != SymbolWhiteList.end())
+      return true;
+
+    for (auto Name : SymbolWhiteList) {
+      if (KernelName.find(Name) != std::string::npos)
+        return true;
+    }
+
+    return false;
+  }
 
   void getDeviceInfo(int &WarpSize, int &MultiProcessorCount,
                      int &MaxGridSizeX) {
@@ -156,8 +183,8 @@ public:
     cudaErrCheck(PREFIX(Memcpy)(&funcData, (void *)DevPtr, Bytes,
                                 PREFIX(MemcpyDeviceToHost)));
 
-    std::cout << "Data Size : " << funcData.elements << " " << funcData.ptr
-              << "\n";
+    DEBUG(std::cout << "Data Size : " << funcData.elements << " "
+                    << funcData.ptr << "\n";)
 
     HostFuncInfo hfuncData(funcData);
     cudaErrCheck(PREFIX(Memcpy)(hfuncData.h_ptr, hfuncData.dev_ptr,
@@ -172,13 +199,13 @@ public:
       auto FuncName = std::regex_replace(
           SymbolName, std::regex("_record_replay_func_info_"), "");
 
-      std::cout << "Adding: " << FuncName << "\n";
+      DEBUG(std::cout << "Adding: " << FuncName << "\n";)
       ArgsInfo[FuncName] = hfuncData;
       ArgsInfo[FuncName].dump(true);
     } else if (SymbolName.find("_record_replay_descr_") != std::string::npos) {
       std::string ModuleName = std::regex_replace(
           SymbolName, std::regex("_record_replay_descr_"), "");
-      std::cout << "Found record replay description\n";
+      DEBUG(std::cout << "Found record replay description\n";)
       auto llvmIRInfo = loadSymbolToHost<uint8_t>(DevPtr, Bytes);
       std::error_code EC;
 
@@ -189,14 +216,14 @@ public:
         throw std::runtime_error("Cannot open device code " + extracted_ir_fn);
       OutBC << StringRef(reinterpret_cast<const char *>(llvmIRInfo.h_ptr),
                          llvmIRInfo.elements);
-      std::cout << "Registered Record replay descr";
+      DEBUG(std::cout << "Registered Record replay descr";)
       OutBC.close();
       llvmIRInfo.dump();
-      std::cout << "One more module file " << extracted_ir_fn << "\n";
+      DEBUG(std::cout << "One more module file " << extracted_ir_fn << "\n";)
       ModuleFiles.push_back(std::move(extracted_ir_fn));
     } else {
-      std::cout << "Device Address of Symbol " << SymbolName << " is " << DevPtr
-                << " with size: " << Bytes << "\n";
+      DEBUG(std::cout << "Device Address of Symbol " << SymbolName << " is "
+                      << DevPtr << " with size: " << Bytes << "\n";)
 
       TrackedGlobalVars.emplace(
           SymbolName, std::move(GlobalVar(SymbolName, Bytes, (void *)DevPtr)));
@@ -217,6 +244,12 @@ public:
     RRGlobalsInitialized = true;
   }
 
+  const std::filesystem::path &getDataStoreDir() const {
+    return record_replay_dir;
+  }
+
+public:
+  MemoryManager *MemManager;
   // Contains name of global and respective size;
   std::unordered_map<std::string, std::pair<size_t, const char *>> GlobalsMap;
 
@@ -225,20 +258,13 @@ public:
   std::unordered_map<const void *, std::pair<std::string, std::string>>
       SymbolTable;
   std::vector<std::string> SymbolWhiteList;
-  std::vector<std::string> SymbolExclList;
   std::vector<std::pair<CudaRegisterFatBinaryArguments *, uint64_t>>
       FatBinaries;
 
   std::unordered_map<std::string, HostFuncInfo> ArgsInfo;
   json::Object RecordedKernels;
+  std::unordered_map<std::string, uint64_t> RecordedDims;
   json::Array ModuleFiles;
-
-  const std::filesystem::path &getDataStoreDir() const {
-    return record_replay_dir;
-  }
-
-public:
-  MemoryManager *MemManager;
 
 private:
   void *device_runtime_handle;
@@ -261,13 +287,13 @@ private:
     reinterpret_cast<void *&>(deviceLaunchKernelInternal) =
         dlsym(device_runtime_handle, DEVICE_FUNC("LaunchKernel"));
     assert(deviceLaunchKernelInternal && "Expected non-null");
-#if !defined(ENABLE_REPLAY_OPT)
+
     reinterpret_cast<void *&>(deviceMallocInternal) =
         dlsym(device_runtime_handle, DEVICE_FUNC("Malloc"));
     assert(deviceMallocInternal && "Expected non-null");
     reinterpret_cast<void *&>(deviceMallocHostInternal) =
         dlsym(device_runtime_handle, DEVICE_FUNC("MallocHost"));
-    assert(deviceMallocHostInternal && "Expected non-null");
+    assert(deviceMallocHostInternal && "Expect/ed non-null");
     reinterpret_cast<void *&>(deviceMallocManagedInternal) =
         dlsym(device_runtime_handle, DEVICE_FUNC("MallocManaged"));
     assert(deviceMallocManagedInternal && "Expected non-null");
@@ -315,32 +341,17 @@ private:
      DeviceId);
 
     // Gather the symbols whitelist.
-    const char *EnvVarSymbols = std::getenv("LIBREPLAY_SYMBOLS");
-    std::string Symbols = (EnvVarSymbols ? EnvVarSymbols : "");
-    DEBUG(std::cout << "Symbols EnvVar " << Symbols << "\n");
+    const char *EnvVarSymbols = std::getenv("RR_SYMBOLS");
+    std::string Symbols = (EnvVarSymbols ? EnvVarSymbols : "all");
 
-    if (!Symbols.empty())
+    if (!Symbols.empty()) {
       for (size_t pos = 0, endpos = 0; endpos != std::string::npos;) {
         endpos = Symbols.find(',', pos);
         SymbolWhiteList.push_back(Symbols.substr(pos, endpos));
-        DEBUG(std::cout << "Symbol: " << Symbols.substr(pos, endpos) << "\n");
         pos = endpos + 1;
       }
+    }
 
-    // Gather the symbols exclusion list.
-    EnvVarSymbols = std::getenv("LIBREPLAY_EXCL_SYMBOLS");
-    Symbols = (EnvVarSymbols ? EnvVarSymbols : "");
-    DEBUG(std::cout << "Symbols Excl. EnvVar " << Symbols << "\n");
-
-    if (!Symbols.empty())
-      for (size_t pos = 0, endpos = 0; endpos != std::string::npos;) {
-        endpos = Symbols.find(',', pos);
-        SymbolExclList.push_back(Symbols.substr(pos, endpos));
-        DEBUG(std::cout << "Symbol excl.: " << Symbols.substr(pos, endpos)
-                        << "\n");
-        pos = endpos + 1;
-      }
-#endif
     auto env_rr_file = std::getenv("RR_FILE");
     if (!env_rr_file) {
       env_rr_file = (char *)"record_replay.json";
@@ -349,15 +360,15 @@ private:
     record_replay_fn = std::string(env_rr_file);
 
     auto env_rr_data_directory = std::getenv("RR_DATA_DIR");
-    if (!env_rr_data_directory) {
-      env_rr_data_directory = (char *)"./";
-    }
+    record_replay_dir =
+        (env_rr_data_directory ? std::string(env_rr_data_directory)
+                               : std::filesystem::current_path().string());
 
-    record_replay_dir = std::string(env_rr_data_directory);
     if (!std::filesystem::is_directory(record_replay_dir)) {
       throw std::runtime_error("Path :" + record_replay_dir.string() +
                                " does not exist.\n");
     }
+    record_replay_dir = std::filesystem::absolute(record_replay_dir);
   }
 
   ~Wrapper() {
@@ -432,7 +443,7 @@ void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
   Wrapper *W = Wrapper::instance();
   DEBUG(std::cout << "Register func hostFun " << (void *)hostFun
                   << " deviceFun " << deviceFun << " Name " << deviceName
-                  << "\n");
+                  << "\n";)
   int status;
   W->SymbolTable[(void *)hostFun] =
       std::make_pair(std::string(deviceFun), std::string(deviceName));
@@ -447,7 +458,7 @@ void *suggestAddr() {
   // insignficant results
   void *ptr;
   cudaErrCheck(deviceMallocInternal(&ptr, 1024));
-  std::cout << "Suggested Address " << std::hex << ptr << "\n";
+  DEBUG(std::cout << "Suggested Address " << std::hex << ptr << "\n";)
   cudaErrCheck(deviceFreeInternal(ptr));
   return ptr;
 }
@@ -458,10 +469,10 @@ PREFIX(Error_t) PREFIX(Malloc)(void **ptr, size_t size) {
   Wrapper *W = Wrapper::instance();
   if (W->MemManager == nullptr) {
     void *initialAddr = suggestAddr();
-    std::cout << "Initializing memory manager\n";
+    DEBUG(std::cout << "Initializing memory manager\n";)
     W->MemManager =
         new MemoryManager(12L * 1024L * 1024L * 1024L, initialAddr, 0);
-    std::cout << "Done \n";
+    DEBUG(std::cout << "Done \n";)
   }
   *ptr = W->MemManager->allocate(size);
   return PREFIX(Success);
@@ -513,14 +524,14 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
     // raw_fd_ostream does not behave well when streaming other types
     // without specifying the size. I cast everything into a StringRef to be
     // explicit about the size of the bytes to be stored.
-    std::cout << "Argument " << i << " Address "
-              << (void *)(*(uint64_t *)(args[i])) << "Size:" << info.h_ptr[i]
-              << "\n";
+    DEBUG(std::cout << "Argument " << i << " Address "
+                    << (void *)(*(uint64_t *)(args[i]))
+                    << "Size:" << info.h_ptr[i] << "\n";)
     OutBC << StringRef(reinterpret_cast<const char *>(args[i]), info.h_ptr[i]);
   }
 
   size_t num_variables = globalVars.size();
-  std::cout << "Adding " << num_variables << " global variables\n";
+  DEBUG(std::cout << "Adding " << num_variables << " global variables\n";)
   OutBC << StringRef(reinterpret_cast<const char *>(&num_variables),
                      sizeof(num_variables));
 
@@ -550,11 +561,21 @@ PREFIX(LaunchKernel)
 (const void *func, dim3 gridDim, dim3 blockDim, void **args, size_t sharedMem,
  PREFIX(Stream_t) stream) {
   Wrapper *W = Wrapper::instance();
-  W->loadRRGlobals();
   std::string func_name = W->SymbolTable[func].first;
+  PREFIX(Error_t) ret;
+
+  if (!W->RecordKernel(func_name, gridDim, blockDim)) {
+    cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
+                                            sharedMem, stream));
+    return ret;
+  }
+  long largestThreadID = (gridDim.x * blockDim.x) * (gridDim.y * blockDim.y) *
+                         (gridDim.z * blockDim.z);
+  W->RecordedDims[func_name] = largestThreadID;
+
+  W->loadRRGlobals();
   auto func_info = W->ArgsInfo[func_name];
   func_info.dump(true);
-  PREFIX(Error_t) ret;
 
   printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
          W->SymbolTable[func].first.c_str(), args, sharedMem);
