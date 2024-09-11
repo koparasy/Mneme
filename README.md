@@ -64,7 +64,7 @@ other cmake packages to find the LLVMPass by using `find_package(RR)`.
 
 ## Example uses
 
-Please check the [RAJA](./examples/raja_vec_add//README.md)) and the cuda [native](./examples/native_cuda_vec_add/README.md) examples.
+Please check the ([RAJA](./examples/raja_vec_add//README.md)) and the cuda ([Native](./examples/native_cuda_vec_add/README.md)) examples.
 
 ## Limitations and Known Issues
 
