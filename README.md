@@ -96,3 +96,18 @@ python scripts/GridSearch.py --replay-path <$RR_INSTALL_DIR/bin/replay> --json <
 ```
 
 and the algorithm will search in the cartesian product of `blocks X grids` to identify optimal configurations in terms of execution time. The script in the end generates a .csv file that contains all tested configurations and their total time.
+
+
+
+## Contributions
+
+We welcome all kinds of contributions: new features, bug fixes, documentation edits; it's all great!
+
+To contribute, make a pull request, with develop as the destination branch.
+
+
+# Release
+
+RecordReplay is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
+
+`LLNL-CODE-851455`
