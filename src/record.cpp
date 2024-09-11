@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <unordered_map>
@@ -248,6 +249,8 @@ public:
     return record_replay_dir;
   }
 
+  uint64_t SuggestedSize() const { return VAMemSuggestedSize; }
+
 public:
   MemoryManager *MemManager;
   // Contains name of global and respective size;
@@ -271,6 +274,7 @@ private:
   int WarpSize;
   int MultiProcessorCount;
   int MaxGridSizeX;
+  uint64_t VAMemSuggestedSize;
   std::string record_replay_fn;
   std::filesystem::path record_replay_dir;
 
@@ -369,6 +373,10 @@ private:
                                " does not exist.\n");
     }
     record_replay_dir = std::filesystem::absolute(record_replay_dir);
+
+    const char *EnvVAMemSize = std::getenv("RR_VA_SIZE");
+    VAMemSuggestedSize = ((EnvVAMemSize ? std::atol(EnvVAMemSize) : 12L)) *
+                         1024L * 1024L * 1024L;
   }
 
   ~Wrapper() {
@@ -470,8 +478,7 @@ PREFIX(Error_t) PREFIX(Malloc)(void **ptr, size_t size) {
   if (W->MemManager == nullptr) {
     void *initialAddr = suggestAddr();
     DEBUG(std::cout << "Initializing memory manager\n";)
-    W->MemManager =
-        new MemoryManager(12L * 1024L * 1024L * 1024L, initialAddr, 0);
+    W->MemManager = new MemoryManager(W->SuggestedSize(), initialAddr, 0);
     DEBUG(std::cout << "Done \n";)
   }
   *ptr = W->MemManager->allocate(size);

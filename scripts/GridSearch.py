@@ -58,6 +58,15 @@ def main():
     )
 
     parser.add_argument(
+        "-r",
+        "--replay-path",
+        type=str,
+        help="path to the replay tool",
+        required=True,
+
+            )
+
+    parser.add_argument(
         "-k",
         "--kernel",
         type=str,
@@ -72,6 +81,9 @@ def main():
     args = parser.parse_args()
     json_file = Path(args.json)
     assert json_file.exists(), f"JSON record db file ({json_file}) does not exist"
+
+    replay_tool = args.replay_path
+    assert Path(replay_tool).exists(), "The provide path to the replay tool does not exist"
     DefaultBlockX = 256
     DefaultGridDimX = 1
     
