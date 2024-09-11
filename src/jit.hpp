@@ -17,8 +17,8 @@
 namespace jit {
 namespace cuda {
 #ifdef ENABLE_CUDA
-void LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
-                    dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs);
+float LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
+                     dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs);
 
 void IRToBackEnd(llvm::Module &M, std::string &CudaArch,
                  llvm::SmallVectorImpl<char> &PTXStr);

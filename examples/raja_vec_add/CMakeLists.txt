@@ -7,7 +7,6 @@ find_package(RR REQUIRED HINTS "${RR_Dir}")
 find_package(CUDAToolkit REQUIRED)
 find_package(CUDA REQUIRED)
 
-
 add_executable(vecAdd-raja vec_add_raja.cu)
 set_target_properties(vecAdd-raja PROPERTIES CUDA_ARCHITECTURES 70)
 
@@ -21,7 +20,5 @@ target_compile_options(
       $<$<COMPILE_LANGUAGE:CUDA>:-fpass-plugin=${RRPassPath}>
     ) 
 
-
-
-  #set_source_files_properties(vec_add_raja.cu PROPERTIES COMPILE_FLAGS "--expt-extended-lambda")
-  target_link_libraries(vecAdd-raja PRIVATE RAJA CUDA::cudart)
+#set_source_files_properties(vec_add_raja.cu PROPERTIES COMPILE_FLAGS "--expt-extended-lambda")
+target_link_libraries(vecAdd-raja PRIVATE RAJA CUDA::cudart)

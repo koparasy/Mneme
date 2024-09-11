@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iostream>
 #include <llvm/IR/Constants.h>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
@@ -79,6 +80,9 @@ static cl::opt<int> MinBlocks("min-blocks",
 static cl::opt<bool> SaveTemps("save-temps",
                                cl::desc("Save temporal files to disk"),
                                cl::init(false), cl::cat(ReplayCategory));
+
+static cl::opt<int> Repeat("repeat", cl::desc("Number of repeat runs"),
+                           cl::init(1), cl::cat(ReplayCategory));
 
 static cl::opt<std::string> RRJson(
     "record-replay-json",
@@ -301,7 +305,6 @@ public:
       KV.second.copyToDevice();
     }
     for (auto &KV : TrackedGlobalVars) {
-      std::cout << "Copying to global: " << KV.first << "\n";
       KV.second.copyToDevice();
     }
   }
@@ -317,7 +320,6 @@ public:
       KV.second.copyFromDevice();
     }
     for (auto &KV : TrackedGlobalVars) {
-      std::cout << "Copying back global: " << KV.first << "\n";
       KV.second.copyFromDevice();
     }
   }
@@ -450,14 +452,14 @@ int main(int argc, char *argv[]) {
 
   std::string iDeviceMemory(KernelInfo.getString("InputData")->str());
   if (!std::filesystem::exists(iDeviceMemory)) {
-    std::cerr << "Record-Replay JSON File " << iDeviceMemory
+    std::cerr << "Record-Replay snapshot File " << iDeviceMemory
               << " does not exist!" << std::endl;
     return 1;
   }
 
   std::string oDeviceMemory(KernelInfo.getString("OutputData")->str());
   if (!std::filesystem::exists(oDeviceMemory)) {
-    std::cerr << "Record-Replay JSON File " << oDeviceMemory
+    std::cerr << "Record-Replay snapshot File " << oDeviceMemory
               << " does not exist!" << std::endl;
     return 1;
   }
@@ -484,23 +486,24 @@ int main(int argc, char *argv[]) {
 
   // Load IR
   InitJITEngine();
+
   auto TIR = loadIR(IRFn);
   if (auto E = TIR.takeError())
     report_fatal_error("Could Not load llvm IR");
 
   auto &M = *TIR.get().getModuleUnlocked();
 
+  OptimizeIR(M, 3, DeviceArch);
+
   Function *KernelFunc = M.getFunction(KernelName);
   AssignLaunchBounds(M, *KernelFunc, MaxThreads, MinBlocks);
   WriteToFile(M, KernelName + ".after_bounds.bc", SaveTemps);
-
-  OptimizeIR(M, 3, DeviceArch);
 
   SmallVector<char, 4096> PTXStr;
   IRToBackEnd(M, DeviceArch, PTXStr);
   StringRef PTX(PTXStr.data(), PTXStr.size());
 
-#ifdef __ENABLE_DEBUG__
+#ifdef ENABLE_DEBUG
   std::error_code EC;
   std::string rrBC("ptx-ir.s");
   raw_fd_ostream OutBC(rrBC, EC);
@@ -515,17 +518,32 @@ int main(int argc, char *argv[]) {
   CUfunction DevFunction;
   CreateDeviceObject(PTX, DevModule);
   GetDeviceFunction(DevFunction, DevModule, KernelName);
-  input.LoadGlobals(DevModule);
-  input.copyToDevice();
-  input.dump();
+  DEBUG(input.dump());
+  std::vector<float> timings;
+  for (int i = 0; i < Repeat; i++) {
+    input.LoadGlobals(DevModule);
+    input.copyToDevice();
+    float milliseconds =
+        LaunchFunction(DevModule, DevFunction, gridDim, blockDim, SharedMem,
+                       (void **)input.args);
+    timings.push_back(milliseconds);
+  }
 
-  // Execute Device
-  LaunchFunction(DevModule, DevFunction, gridDim, blockDim, SharedMem,
-                 (void **)input.args);
+  float sum = std::accumulate(timings.begin(), timings.end(), 0.0);
+  float mean = sum / timings.size();
+
+  // Compute the standard deviation
+  float sq_sum =
+      std::inner_product(timings.begin(), timings.end(), timings.begin(), 0.0);
+  float std_dev = std::sqrt(sq_sum / timings.size() - mean * mean);
+  std::cout << "Mean execution time (ms): " << mean
+            << " standard Deviation: " << std_dev << " Block Dims ("
+            << blockDim.x << "," << blockDim.y << "," << blockDim.z << ")"
+            << " Grid Dims (" << gridDim.x << "," << gridDim.y << ","
+            << gridDim.z << ") MaxThreads:" << MaxThreads << " MinBlocks "
+            << MinBlocks << "\n";
+
   std::cout << "Done\n";
-
-  // Compare "input memory with output memory"
-
   input.copyFromDevice();
 
   if (input.compare(output)) {

@@ -239,17 +239,24 @@ void GetDeviceFunction(CUfunction &CUFunc, CUmodule &CUMod,
   cuErrCheck(cuModuleGetFunction(&CUFunc, CUMod, FunctionName.data()));
 }
 
-void LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
-                    dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs) {
-  std::cout << "Launching with Grid (" << GridDim.x << "," << GridDim.y << ","
-            << GridDim.z << ")\n";
-  std::cout << "Launching with Block(" << BlockDim.x << "," << BlockDim.y << ","
-            << BlockDim.z << ")\n";
+float LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
+                     dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs) {
+  float milliseconds = 0;
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
 
-  cuErrCheck(cuLaunchKernel(CUFunc, GridDim.x, GridDim.y, GridDim.z, BlockDim.x,
-                            BlockDim.y, BlockDim.z, ShMemSize, nullptr,
-                            KernelArgs, nullptr));
+  cudaEventRecord(start);
+  cuLaunchKernel(CUFunc, GridDim.x, GridDim.y, GridDim.z, BlockDim.x,
+                 BlockDim.y, BlockDim.z, ShMemSize, 0, KernelArgs, nullptr);
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&milliseconds, start, stop);
+
   cudaErrCheck(cudaDeviceSynchronize());
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+  return milliseconds;
 }
 } // namespace cuda
 } // namespace jit
