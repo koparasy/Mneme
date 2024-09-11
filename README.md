@@ -110,4 +110,18 @@ To contribute, make a pull request, with develop as the destination branch.
 
 RecordReplay is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
 
-`LLNL-CODE-851455`
+
+## Citation
+
+If you use this software, please cite it as below:
+
+```bibtex
+@inproceedings{parasyris2023scalable,
+  title={Scalable Tuning of (OpenMP) GPU Applications via Kernel Record and Replay},
+  author={Parasyris, Konstantinos and Georgakoudis, Giorgis and Rangel, Esteban and Laguna, Ignacio and Doerfert, Johannes},
+  booktitle={Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis},
+  pages={1--14},
+  year={2023}
+}
+```
+
