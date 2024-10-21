@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <hip/hip_runtime_api.h>
 #include <iostream>
 #include <llvm/IR/Constants.h>
 #include <numeric>
@@ -11,10 +12,8 @@
 #include <string>
 #include <sys/types.h>
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-
 #include "common.hpp"
+#include "device_types.hpp"
 #include "jit.hpp"
 #include "macro.hpp"
 #include "memory.hpp"
@@ -23,7 +22,10 @@
 
 using namespace llvm;
 #ifdef ENABLE_CUDA
-using namespace jit::cuda;
+#include <cuda.h>
+#include <cuda_runtime.h>
+#elif defined(ENABLE_HIP)
+#include <hip/hip_runtime.h>
 #endif
 
 static cl::OptionCategory ReplayCategory("Replay Tool Options",
@@ -155,12 +157,14 @@ public:
   }
 
   void copyToDevice() {
-    cudaErrCheck(cudaMemcpy(DevPtr, HostPtr, MemSize, cudaMemcpyHostToDevice));
+    DeviceRTErrCheck(
+        PREFIX(Memcpy)(DevPtr, HostPtr, MemSize, PREFIX(MemcpyHostToDevice)));
     Copied = true;
   }
 
   void copyFromDevice() {
-    cudaErrCheck(cudaMemcpy(HostPtr, DevPtr, MemSize, cudaMemcpyDeviceToHost));
+    DeviceRTErrCheck(
+        PREFIX(Memcpy)(HostPtr, DevPtr, MemSize, PREFIX(MemcpyDeviceToHost)));
   }
 
   bool compare(MemoryBlob &blob) {
@@ -309,9 +313,9 @@ public:
     }
   }
 
-  void LoadGlobals(CUmodule &CUMod) {
+  void LoadGlobals(gpu::DeviceModule &Mod) {
     for (auto &KV : TrackedGlobalVars) {
-      KV.second.setDevPtrFromModule(CUMod);
+      KV.second.setDevPtrFromModule(Mod);
     }
   }
 
@@ -355,29 +359,13 @@ public:
   }
 };
 
-std::pair<std::string, CUdevice> init() {
-  CUdevice CUDev;
-  CUcontext CUCtx;
-
-  cuErrCheck(cuInit(0));
-
-  CUresult CURes = cuCtxGetDevice(&CUDev);
-  if (CURes == CUDA_ERROR_INVALID_CONTEXT or !CUDev)
-    // TODO: is selecting device 0 correct?
-    cuErrCheck(cuDeviceGet(&CUDev, 0));
-
-  cuErrCheck(cuCtxGetCurrent(&CUCtx));
-  if (!CUCtx)
-    cuErrCheck(cuCtxCreate(&CUCtx, 0, CUDev));
-
-  int CCMajor;
-  cuErrCheck(cuDeviceGetAttribute(
-      &CCMajor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, CUDev));
-  int CCMinor;
-  cuErrCheck(cuDeviceGetAttribute(
-      &CCMinor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, CUDev));
-  std::string CudaArch = "sm_" + std::to_string(CCMajor * 10 + CCMinor);
-  return std::make_pair(CudaArch, CUDev);
+std::string init() {
+#ifdef ENABLE_CUDA
+  cuErrCheck(DRIVER_PREFIX(Init)(0));
+#elif defined(ENABLE_HIP)
+  DeviceRTErrCheck(DRIVER_PREFIX(Init)(0));
+#endif
+  return getArch();
 }
 
 dim3 getDim3(json::Object &Info, std::string key, long opt_x, long opt_y,
@@ -400,8 +388,7 @@ int main(int argc, char *argv[]) {
   cl::HideUnrelatedOptions(ReplayCategory);
   cl::ParseCommandLineOptions(argc, argv, "GPU Replay Tool\n");
 
-  auto DeviceSpec = init();
-  std::string DeviceArch = DeviceSpec.first;
+  std::string DeviceArch = init();
 
   if (!std::filesystem::exists(RRJson.getValue())) {
     std::cerr << "Record-Replay JSON File " << RRJson << " does not exist!"
@@ -514,8 +501,8 @@ int main(int argc, char *argv[]) {
 #endif
 
   // Lower to device and get function
-  CUmodule DevModule;
-  CUfunction DevFunction;
+  gpu::DeviceModule DevModule;
+  gpu::DeviceFunction DevFunction;
   CreateDeviceObject(PTX, DevModule);
   GetDeviceFunction(DevFunction, DevModule, KernelName);
   DEBUG(input.dump());

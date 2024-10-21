@@ -1,29 +1,39 @@
 
 
 add_library(record SHARED record.cpp memory.cpp common.cpp)
+add_executable(replay replay.cpp memory.cpp jit.cpp common.cpp)
 
 set(libs ${LLVM_AVAILABLE_LIBS})
 
 
+target_include_directories(record SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 if (ENABLE_CUDA)
 target_include_directories(record PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 target_compile_definitions(record PRIVATE -DENABLE_CUDA -DENABLE_DEBUG)
-target_include_directories(record SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(record PRIVATE CUDA::cudart CUDA::cuda_driver)
+target_include_directories(replay PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(replay PRIVATE LLVM CUDA::cudart CUDA::cuda_driver)
+target_compile_definitions(replay PRIVATE -DENABLE_CUDA -DENABLE_DEBUG ${LLVM_DEFINITIONS})
+target_link_libraries(record PRIVATE LLVM "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
+
 if (ENABLE_CXX_DEMANGLE)
     target_compile_definitions(record PRIVATE -DENABLE_CXX_DEMANGLE)
 endif()
+elseif(ENABLE_HIP)
+  target_compile_definitions(replay PRIVATE __HIP_PLATFORM_AMD__)
+  target_compile_definitions(record PRIVATE __HIP_PLATFORM_AMD__)
+  target_link_libraries(replay PRIVATE hip::host)
+  target_include_directories(replay PRIVATE ${HIP_INCLUDE_DIRS})
+  target_include_directories(record PRIVATE ${HIP_INCLUDE_DIRS})
+  message(STATUS "Linking with libraries: ${LLVM_AVAILABLE_LIBS}")
+  target_link_libraries(replay PRIVATE ${LLVM_AVAILABLE_LIBS})
+  target_link_libraries(record PRIVATE ${LLVM_AVAILABLE_LIBS})
 endif()
 
-target_link_libraries(record PRIVATE LLVM "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
+
 add_library(RR::Record ALIAS record)
 
-add_executable(replay replay.cpp memory.cpp jit.cpp common.cpp)
-target_include_directories(replay PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 target_include_directories(replay PRIVATE ${LLVM_INCLUDE_DIRS})
-target_link_libraries(replay PRIVATE LLVM CUDA::cudart CUDA::cuda_driver)
-target_compile_definitions(replay PRIVATE -DENABLE_CUDA -DENABLE_DEBUG ${LLVM_DEFINITIONS})
-target_compile_definitions(replay PRIVATE )
 
 set_target_properties(replay PROPERTIES
   INSTALL_RPATH "${LLVM_LIBRARY_DIR}")

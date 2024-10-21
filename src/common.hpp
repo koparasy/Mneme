@@ -4,6 +4,8 @@
 #ifdef ENABLE_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#elif defined(ENABLE_HIP)
+#include <hip/hip_runtime.h>
 #endif
 
 #include "macro.hpp"
@@ -36,7 +38,11 @@ struct GlobalVar {
   explicit GlobalVar(const void **BufferPtr);
   ~GlobalVar();
 
+#ifdef ENABLE_CUDA
   void setDevPtrFromModule(CUmodule &Module);
+#elif defined(ENABLE_HIP)
+  void setDevPtrFromModule(hipModule_t &Module);
+#endif
 
   void dump();
 

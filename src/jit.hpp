@@ -9,26 +9,21 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 
-#ifdef ENABLE_CUDA
-#include <cuda.h>
-#include <cuda_runtime.h>
-#endif
+#include "device_types.hpp"
 
-namespace jit {
-namespace cuda {
-#ifdef ENABLE_CUDA
-float LaunchFunction(CUmodule &CUMod, CUfunction &CUFunc, dim3 GridDim,
-                     dim3 &BlockDim, uint64_t ShMemSize, void **KernelArgs);
+float LaunchFunction(gpu::DeviceModule &Mod, gpu::DeviceFunction &Func,
+                     dim3 GridDim, dim3 &BlockDim, uint64_t ShMemSize,
+                     void **KernelArgs);
 
 void IRToBackEnd(llvm::Module &M, std::string &CudaArch,
                  llvm::SmallVectorImpl<char> &PTXStr);
 
-void CreateDeviceObject(llvm::StringRef &PTX, CUmodule &CUMod);
+void CreateDeviceObject(llvm::StringRef &CodeRepr, gpu::DeviceModule &Mod);
 
-void GetDeviceFunction(CUfunction &CUFunc, CUmodule &CUMod,
+void GetDeviceFunction(gpu::DeviceFunction &Func, gpu::DeviceModule &Mod,
                        llvm::StringRef FunctionName);
 
-void OptimizeIR(llvm::Module &M, unsigned int lvl, std::string &CudaArch);
+void OptimizeIR(llvm::Module &M, unsigned int lvl, std::string &DeviceArch);
 
 void SetLaunchBounds(llvm::Module &M, std::string &FnName, int MaxThreads,
                      int MinBlocks);
@@ -37,8 +32,3 @@ llvm::Expected<llvm::orc::ThreadSafeModule> loadIR(llvm::StringRef FileName);
 
 void InitJITEngine();
 std::string getArch();
-
-#endif
-
-} // namespace cuda
-} // namespace jit

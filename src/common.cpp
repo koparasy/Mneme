@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include "memory.hpp"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -53,10 +54,11 @@ void GlobalVar::dump() {
   //  }
 }
 
-void GlobalVar::setDevPtrFromModule(CUmodule &CUMod) {
+void GlobalVar::setDevPtrFromModule(gpu::DeviceModule &Mod) {
   size_t LSize;
-  CUdeviceptr LDevPtr;
-  if (cuModuleGetGlobal(&LDevPtr, &LSize, CUMod, Name.c_str()) != CUDA_SUCCESS)
+  gpu::DevicePtr LDevPtr;
+  if (DRIVER_PREFIX(ModuleGetGlobal)(&LDevPtr, &LSize, Mod, Name.c_str()) !=
+      gpu::DeviceSuccess)
     throw std::runtime_error("Cannot load Global " + Name + "\n");
   if (LSize != Size)
     throw std::runtime_error(
@@ -68,11 +70,13 @@ void GlobalVar::setDevPtrFromModule(CUmodule &CUMod) {
 }
 
 void GlobalVar::copyToDevice() {
-  cudaErrCheck(cudaMemcpy(DevPtr, HostPtr, Size, cudaMemcpyHostToDevice));
+  DeviceRTErrCheck(
+      PREFIX(Memcpy)(DevPtr, HostPtr, Size, PREFIX(MemcpyHostToDevice)));
 }
 
 void GlobalVar::copyFromDevice() {
-  cudaErrCheck(cudaMemcpy(HostPtr, DevPtr, Size, cudaMemcpyDeviceToHost));
+  DeviceRTErrCheck(
+      PREFIX(Memcpy)(HostPtr, DevPtr, Size, PREFIX(MemcpyDeviceToHost)));
 }
 
 bool GlobalVar::compare(GlobalVar &other) {

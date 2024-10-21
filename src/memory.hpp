@@ -1,9 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "macro.hpp"
 #include <cstdint>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <iomanip>
 #include <iostream>
 #include <llvm/ADT/StringRef.h>
@@ -14,14 +11,15 @@
 #include <unordered_map>
 #include <utility>
 
-#ifdef ENABLE_CUDA
-namespace gpu = cuda;
-#endif
+#include "device_types.hpp"
 
+#ifdef ENABLE_CUDA
 namespace cuda {
+
 uint64_t getReccommendedPageSize(int device_id = 0);
 uint64_t getMinPageSize(int device_id = 0);
 void *ReserveVirtualAddress(void *req_addr, uint64_t VASize, uint64_t PageSize);
+void MemAddrFree(uintptr_t VA, uint64_t size);
 
 struct MemoryBlob {
   CUmemGenericAllocationHandle AHandle;
@@ -41,8 +39,34 @@ struct MemoryBlob {
 
   void release();
 };
-
 } // namespace cuda
+#elif defined(ENABLE_HIP)
+namespace hip {
+uint64_t getReccommendedPageSize(int device_id = 0);
+uint64_t getMinPageSize(int device_id = 0);
+void *ReserveVirtualAddress(void *req_addr, uint64_t VASize, uint64_t PageSize);
+void MemAddrFree(uintptr_t VA, uint64_t size);
+
+struct MemoryBlob {
+  hipMemGenericAllocationHandle_t AHandle;
+  uintptr_t BlobAddr;
+  uint64_t Size;
+  uintptr_t DeviceID;
+
+  MemoryBlob(const MemoryBlob &) = delete;
+
+  MemoryBlob &operator=(const MemoryBlob &) = delete;
+
+  MemoryBlob(uintptr_t Addr, uintptr_t sz, int device_id = 0);
+
+  MemoryBlob(MemoryBlob &&other) noexcept;
+
+  MemoryBlob &operator=(MemoryBlob &&other) noexcept;
+
+  void release();
+};
+} // namespace hip
+#endif
 
 struct ContiguousAddrBlock {
   uintptr_t PageAddr; // Starting address of the free block

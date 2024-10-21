@@ -63,12 +63,6 @@ static void (*__deviceRegisterFunctionInternal)(
 
 static void (*__deviceRegisterFatBinaryEndInternal)(void *);
 
-struct MappedAlloc {
-  size_t actual_size;
-  size_t requested_size;
-  CUmemGenericAllocationHandle handle;
-};
-
 // Reverse eng. fat binary format, unused for now.
 struct CudaRegisterFatBinaryArguments {
   int magic_number;
@@ -162,7 +156,7 @@ public:
 
   bool isTunable(const void *Func, int &MaxThreadsPerBlock, int Dim) {
     PREFIX(FuncAttributes) Attr;
-    PREFIX(FuncGetAttributes)(&Attr, Func);
+    DeviceRTErrCheck(PREFIX(FuncGetAttributes)(&Attr, Func));
     DEBUG(printf("deviceFuncGetAttributes sharedSizeBytes %zu numRegs %d "
                  "maxThreadsPerBlock %d\n",
                  Attr.sharedSizeBytes, Attr.numRegs, Attr.maxThreadsPerBlock);)
@@ -181,16 +175,16 @@ public:
     assert(Bytes == sizeof(FuncInfo) && "Func info size do not match");
     FuncInfo funcData;
 
-    cudaErrCheck(PREFIX(Memcpy)(&funcData, (void *)DevPtr, Bytes,
-                                PREFIX(MemcpyDeviceToHost)));
+    DeviceRTErrCheck(PREFIX(Memcpy)(&funcData, (void *)DevPtr, Bytes,
+                                    PREFIX(MemcpyDeviceToHost)));
 
     DEBUG(std::cout << "Data Size : " << funcData.elements << " "
                     << funcData.ptr << "\n";)
 
     HostFuncInfo hfuncData(funcData);
-    cudaErrCheck(PREFIX(Memcpy)(hfuncData.h_ptr, hfuncData.dev_ptr,
-                                sizeof(dType) * hfuncData.elements,
-                                PREFIX(MemcpyDeviceToHost)));
+    DeviceRTErrCheck(PREFIX(Memcpy)(hfuncData.h_ptr, hfuncData.dev_ptr,
+                                    sizeof(dType) * hfuncData.elements,
+                                    PREFIX(MemcpyDeviceToHost)));
     return hfuncData;
   }
 
@@ -239,8 +233,13 @@ public:
       return;
     for (auto GM = GlobalsMap.begin(); GM != GlobalsMap.end(); GM++) {
       void *DevPtr;
-      cudaErrCheck(cudaGetSymbolAddress(&DevPtr, GM->second.second));
+      DEBUG(std::cout << "Getting symbol address of symbol " << GM->first
+                      << " with host address: " << (void *)GM->second.second
+                      << "\n";)
+      DeviceRTErrCheck(
+          PREFIX(GetSymbolAddress)(&DevPtr, (const void *)GM->second.second));
       addGlobal(GM->first, DevPtr, GM->second.first);
+      // hipError_t err = hipGetSymbolAddress(&DevPtr, GM->second.second);
     }
     RRGlobalsInitialized = true;
   }
@@ -316,33 +315,30 @@ private:
 
     // Gather device info.
     int DeviceId;
-    PREFIX(GetDevice(&DeviceId));
-    PREFIX(DeviceGetAttribute)
-    (&WarpSize,
+    DeviceRTErrCheck(PREFIX(GetDevice(&DeviceId)));
+    DeviceRTErrCheck(PREFIX(DeviceGetAttribute)(&WarpSize,
     // NOTE: very ugly, thank you vendors!
 #ifdef ENABLE_CUDA
-     cudaDevAttrWarpSize,
+                                                cudaDevAttrWarpSize,
 #else
-     hipDeviceAttributeWarpSize,
+                                                hipDeviceAttributeWarpSize,
 #endif
-     DeviceId);
-    PREFIX(DeviceGetAttribute)
-    (&MultiProcessorCount,
+                                                DeviceId));
+    DeviceRTErrCheck(PREFIX(DeviceGetAttribute)(&MultiProcessorCount,
 #ifdef ENABLE_CUDA
-     cudaDevAttrMultiProcessorCount,
+                                                cudaDevAttrMultiProcessorCount,
 #else
-     hipDeviceAttributeMultiprocessorCount,
+                                                hipDeviceAttributeMultiprocessorCount,
 #endif
-     DeviceId);
+                                                DeviceId));
     // TODO: We use the x-dimension for now, consider adding y,z if needed.
-    PREFIX(DeviceGetAttribute)
-    (&MaxGridSizeX,
+    DeviceRTErrCheck(PREFIX(DeviceGetAttribute)(&MaxGridSizeX,
 #ifdef ENABLE_CUDA
-     cudaDevAttrMaxGridDimX,
+                                                cudaDevAttrMaxGridDimX,
 #else
-     hipDeviceAttributeMaxGridDimX,
+                                                hipDeviceAttributeMaxGridDimX,
 #endif
-     DeviceId);
+                                                DeviceId));
 
     // Gather the symbols whitelist.
     const char *EnvVarSymbols = std::getenv("RR_SYMBOLS");
@@ -401,10 +397,8 @@ private:
     JsonOS << json::Value(std::move(record));
     JsonOS.close();
 
-    if (MemManager) {
-      delete MemManager;
-      MemManager = nullptr;
-    }
+    delete MemManager;
+    MemManager = nullptr;
   }
 };
 
@@ -439,8 +433,7 @@ void PREFIX_UU(RegisterVar)(void **fatCubinHandle, char *hostVar,
   DEBUG(std::cout << "hostVar " << (void *)hostVar << " deviceAddr "
                   << (void *)deviceAddress << " deviceName " << deviceName
                   << " ext " << ext << " size " << size << " constant "
-                  << constant << " global " << global << " SymbolAddr is "
-                  << "\n";)
+                  << constant << " global " << global << "\n";)
   //  W->addGlobal(deviceName, DevPtr, size);
 }
 
@@ -461,14 +454,18 @@ void PREFIX_UU(RegisterFunction)(void **fatCubinHandle, const char *hostFun,
 }
 
 void *suggestAddr() {
+#ifdef ENABLE_CUDA
   // FIXME: This was a try and error approach. Getting a device address this
   // way allows replay to obtain it again. Otherwise driver returns
   // insignficant results
   void *ptr;
-  cudaErrCheck(deviceMallocInternal(&ptr, 1024));
+  DeviceRTErrCheck(deviceMallocInternal(&ptr, 1024));
   DEBUG(std::cout << "Suggested Address " << std::hex << ptr << "\n";)
-  cudaErrCheck(deviceFreeInternal(ptr));
+  DeviceRTErrCheck(deviceFreeInternal(ptr));
   return ptr;
+#elif defined(ENABLE_HIP)
+  return nullptr;
+#endif
 }
 
 PREFIX(Error_t) PREFIX(Malloc)(void **ptr, size_t size) {
@@ -553,9 +550,8 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
     OutBC << StringRef(reinterpret_cast<const char *>(&GV.Size),
                        sizeof(GV.Size));
 
-    PREFIX(Memcpy)
-    ((void *)GV.HostPtr, (void *)GV.DevPtr, GV.Size,
-     PREFIX(MemcpyDeviceToHost));
+    DeviceRTErrCheck(PREFIX(Memcpy)((void *)GV.HostPtr, (void *)GV.DevPtr,
+                                    GV.Size, PREFIX(MemcpyDeviceToHost)));
     OutBC << StringRef(reinterpret_cast<const char *>(GV.HostPtr), GV.Size);
   }
   OutBC << *W->MemManager;
@@ -574,20 +570,20 @@ PREFIX(LaunchKernel)
   PREFIX(Error_t) ret;
 
   if (!W->RecordKernel(func_name, gridDim, blockDim)) {
-    cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
-                                            sharedMem, stream));
+    DeviceRTErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
+                                                sharedMem, stream));
     return ret;
   }
   long largestThreadID = (gridDim.x * blockDim.x) * (gridDim.y * blockDim.y) *
                          (gridDim.z * blockDim.z);
   W->RecordedDims[func_name] = largestThreadID;
 
+  printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
+         W->SymbolTable[func].first.c_str(), args, sharedMem);
+
   W->loadRRGlobals();
   auto func_info = W->ArgsInfo[func_name];
   func_info.dump(true);
-
-  printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
-         W->SymbolTable[func].first.c_str(), args, sharedMem);
 
   json::Object KernelInfo;
   KernelInfo["Name"] = W->SymbolTable[func].first.c_str();
@@ -614,13 +610,13 @@ PREFIX(LaunchKernel)
   KernelInfo["Block"] = json::Value(std::move(Block));
   KernelInfo["SharedMemory"] = sharedMem;
 
-  cudaErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
-                                          sharedMem, stream));
+  DeviceRTErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
+                                              sharedMem, stream));
   // TODO: We need here to sync, make sure we get all the data after
   // termination of the kernel. Alternatively we can synchronize with the
   // stream. I am hesitant for this. Multi-stream execution can potentially
   // modify the device memory as we copy the data.
-  PREFIX(DeviceSynchronize());
+  DeviceRTErrCheck(PREFIX(DeviceSynchronize()));
   auto oDataFn =
       W->getDataStoreDir() /
       Twine("After" + std::to_string(hasher(W->SymbolTable[func].first)) +

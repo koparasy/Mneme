@@ -133,20 +133,29 @@ static void createRRModuleDevice(Module &M) {
       ArrayRef<uint8_t>((const uint8_t *)ModuleIR.data(), ModuleIR.size()));
   auto *GV = new GlobalVariable(
       M, ClonedModule->getType(), /* isConstant */ true,
-      GlobalValue::PrivateLinkage, ClonedModule, "record_replay_module");
+      GlobalValue::ExternalLinkage, ClonedModule, "record_replay_module");
   appendToUsed(M, {GV});
 #if ENABLE_HIP
   // TODO: We need to provide a unique identifier in the sections. Probably
   // prefixing them
-  GV->setSection(Twine(".record_replay");
+  GV->setSection("record_replay_module");
 #endif
 
   return;
 }
 
 StructType *getRecordReplayFuncDescTy(Module &M) {
+  llvm::StructType *existingStruct =
+      llvm::StructType::getTypeByName(M.getContext(), "func_info");
+  if (existingStruct)
+    return existingStruct;
+
   Type *Int64Ty = Type::getInt64Ty(M.getContext());
-  return StructType::create({Int64Ty, PointerType::get(Int64Ty, 0)},
+  int addrspace = 0;
+#ifdef ENABLE_HIP
+  addrspace = 1;
+#endif
+  return StructType::create({Int64Ty, PointerType::get(Int64Ty, addrspace)},
                             "func_info");
 }
 
@@ -196,7 +205,7 @@ void deviceInstrumentation(Module &M) {
           ArrayType::get(Int64Ty, KV.second.size());
       Constant *CA = ConstantDataArray::get(M.getContext(), KV.second);
       auto *Elements = new GlobalVariable(
-          M, RuntimeConstantArrayTy, true, GlobalValue::PrivateLinkage, CA,
+          M, RuntimeConstantArrayTy, true, GlobalValue::ExternalLinkage, CA,
           "_record_replay_elements_" + KV.first->getName());
 
       Constant *Index = ConstantInt::get(Int64Ty, 0, false);
@@ -205,16 +214,20 @@ void deviceInstrumentation(Module &M) {
       Constant *NumElems = ConstantInt::get(Int64Ty, KV.second.size(), false);
       Constant *CS = ConstantStruct::get(FunctionInfoTy, {NumElems, GVPtr});
       auto *GV = new GlobalVariable(
-          M, FunctionInfoTy, true, GlobalValue::PrivateLinkage, CS,
+          M, FunctionInfoTy, true, GlobalValue::ExternalLinkage, CS,
           generateRecordReplayKernelName(KV.first->getName()));
+#ifdef ENABLE_CUDA
       appendToUsed(M, {GV});
+#elif defined(ENABLE_HIP)
+      appendToCompilerUsed(M, {GV});
+#endif
     } else {
       Constant *NumElems = ConstantInt::get(Int64Ty, KV.second.size(), false);
       Constant *CS = ConstantStruct::get(
           FunctionInfoTy,
           {NumElems, ConstantPointerNull::get(PointerType::get(Int64Ty, 0))});
       auto *GV = new GlobalVariable(
-          M, FunctionInfoTy, true, GlobalValue::PrivateLinkage, CS,
+          M, FunctionInfoTy, true, GlobalValue::ExternalLinkage, CS,
           generateRecordReplayKernelName(KV.first->getName()));
     }
   }
@@ -233,10 +246,13 @@ void deviceInstrumentation(Module &M) {
   auto *GV = new GlobalVariable(M, IRModule->getType(), /* isConstant */ true,
                                 GlobalValue::PrivateLinkage, IRModule,
                                 "_record_replay_ir_module_");
-
+  int addrspace = 0;
+#ifdef ENABLE_HIP
+  addrspace = 1;
+#endif
   Type *Int8Ty = Type::getInt64Ty(M.getContext());
-  StructType *ModuleIRTy =
-      StructType::create({Int64Ty, PointerType::get(Int8Ty, 0)}, "module_info");
+  StructType *ModuleIRTy = StructType::create(
+      {Int64Ty, PointerType::get(Int8Ty, addrspace)}, "module_info");
 
   Constant *IRSize = ConstantInt::get(Int64Ty, ModuleIR.size(), false);
 
@@ -254,9 +270,13 @@ void deviceInstrumentation(Module &M) {
   std::replace(IRName.begin(), IRName.end(), '-', '_');
 
   auto *GVIR = new GlobalVariable(M, ModuleIRTy, true,
-                                  GlobalValue::PrivateLinkage, CS, IRName);
+                                  GlobalValue::ExternalLinkage, CS, IRName);
 
-  appendToUsed(M, {GVIR});
+#ifdef ENABLE_CUDA
+  appendToUsed(M, {GV});
+#elif defined(ENABLE_HIP)
+  appendToCompilerUsed(M, {GV});
+#endif
 
   std::filesystem::path filename(M.getSourceFileName());
   std::string rrBC(Twine(filename.filename().string(), ".device-rr.bc").str());
@@ -294,7 +314,7 @@ CreateGlobalVariable(Module &M, StringRef globalName) {
 
   auto ASpace = M.getDataLayout().getDefaultGlobalsAddressSpace();
   auto *GVStub = new GlobalVariable(
-      M, FunctionInfoTy, false /*isConstant=*/, GlobalValue::InternalLinkage,
+      M, FunctionInfoTy, false /*isConstant=*/, GlobalValue::ExternalLinkage,
       UndefValue::get(FunctionInfoTy), globalName, nullptr,
       llvm::GlobalValue::NotThreadLocal, ASpace);
 
@@ -305,7 +325,7 @@ CreateGlobalVariable(Module &M, StringRef globalName) {
       M.getContext(), ArrayRef<uint8_t>((const uint8_t *)globalName.data(),
                                         globalName.size() + 1));
   auto *GVName = new GlobalVariable(M, VName->getType(), /* isConstant */ true,
-                                    GlobalValue::InternalLinkage, VName);
+                                    GlobalValue::ExternalLinkage, VName);
   GVName->setAlignment(MaybeAlign(1));
 
   return std::make_pair(GVStub, GVName);
@@ -314,7 +334,7 @@ CreateGlobalVariable(Module &M, StringRef globalName) {
 static void RegisterGlobalVariable(Module &M, Value *fatBinHandle,
                                    Instruction *IP, StringRef globalName) {
 #if ENABLE_HIP
-#error pending implementation
+  Function *RegisterVariable = M.getFunction("__hipRegisterVar");
 #elif ENABLE_CUDA
   Function *RegisterVariable = M.getFunction("__cudaRegisterVar");
 #endif
@@ -401,7 +421,8 @@ GlobalVariable *getFatBinWrapper(Module &M) {
 
 FunctionType *getRRRuntimeCallFnTy(Module &M) {
   Type *voidTy = Type::getVoidTy(M.getContext());
-  Type *VoidPtrTy = Type::getInt8PtrTy(M.getContext());
+  Type *VoidPtrTy = llvm::PointerType::get(
+      M.getContext(), 0); // Type::getInt8PtrTy(M.getContext());
   Type *Int64Ty = Type::getInt64Ty(M.getContext());
   FunctionType *RREntryFn =
       FunctionType::get(voidTy, {VoidPtrTy, Int64Ty}, /*isVarArg=*/false);
@@ -410,7 +431,7 @@ FunctionType *getRRRuntimeCallFnTy(Module &M) {
 
 void RegisterLLVMIRVariable(Module &M) {
 #if ENABLE_HIP
-  assert(false && "Pending implementation");
+  Function *RegisterGlobalsFn = M.getFunction("__hip_register_globals");
 #elif ENABLE_CUDA
   Function *RegisterGlobalsFn = M.getFunction("__cuda_register_globals");
 #else
@@ -442,11 +463,23 @@ void hostInstrumentation(Module &M) {
            << " Does not have kernel functions\n";
     return;
   }
-  // We register all device globals so that we can access them.
-  auto KernelNameMap = InstantiateGlobalVariables(M);
+
+#ifdef ENABLE_CUDA
   Function *RegisterFunction = M.getFunction("__cudaRegisterFunction");
   Function *RegisterVars = M.getFunction("__cudaRegisterVar");
-  if (RegisterFunction->getNumUses() != 0 || RegisterVars->getNumUses() != 0)
+#elif defined(ENABLE_HIP)
+  Function *RegisterFunction = M.getFunction("__hipRegisterFunction");
+  Function *RegisterVars = M.getFunction("__hipRegisterVar");
+#endif
+
+  assert(RegisterFunction == nullptr && RegisterVars == nullptr &&
+         "Module detects HIP/CUDA runtime but cannot find any register "
+         "variable or function");
+
+  InstantiateGlobalVariables(M);
+
+  if ((RegisterFunction != nullptr && RegisterFunction->getNumUses() != 0) ||
+      (RegisterVars != nullptr && RegisterVars->getNumUses() != 0))
     RegisterLLVMIRVariable(M);
 
   std::filesystem::path filename(M.getSourceFileName());
@@ -461,9 +494,11 @@ void hostInstrumentation(Module &M) {
 
 void visitor(Module &M) {
   if (!isDeviceCompilation(M)) {
+    std::cout << "This is host compilation\n";
     hostInstrumentation(M);
     return;
   }
+  std::cout << "This is device compilation\n";
   deviceInstrumentation(M);
   return;
 }
@@ -475,6 +510,11 @@ struct RRPass : PassInfoMixin<RRPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
     visitor(M);
     // TODO: is anything preserved?
+    assert(!verifyModule(M, errs()));
+    if (verifyModule(M, &errs())) {
+      std::cout << "This is a broken module \n";
+    }
+    errs() << "Output is correct\n";
     return PreservedAnalyses::none();
     // return PreservedAnalyses::all();
   }

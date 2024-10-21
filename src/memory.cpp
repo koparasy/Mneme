@@ -1,15 +1,16 @@
 #include <cstdint>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <stdexcept>
 
 #include <iostream>
 #include <sys/types.h>
 
+#include "common.hpp"
 #include "macro.hpp"
 #include "memory.hpp"
 
 #ifdef ENABLE_CUDA
+#include <cuda.h>
+#include <cuda_runtime.h>
 namespace cuda {
 
 uint64_t getPageSize(int device_id,
@@ -67,6 +68,10 @@ void *ReserveVirtualAddress(void *req_addr, uint64_t VASize,
                   << "\n";)
   cuErrCheck(cuMemAddressReserve(&devPtr, VASize, PageSize,
                                  reinterpret_cast<CUdeviceptr>(req_addr), 0));
+  DEBUG(std::cout << "Allocated VASize "
+                  << (double)((double)VASize / (1024L * 1024L * 1024L))
+                  << " at Address " << std::hex << devPtr << std::dec << "\n";)
+
   return (void *)devPtr;
 }
 
@@ -85,7 +90,102 @@ void MemoryBlob::release() {
   cuErrCheck(cuMemRelease(AHandle));
 }
 
+void MemAddrFree(uintptr_t VA, uint64_t Size) {
+  cuErrCheck(cuMemAddressFree(VA, Size));
+}
+
 }; // namespace cuda
+#elif defined(ENABLE_HIP)
+namespace hip {
+
+uint64_t getPageSize(int device_id,
+                     const hipMemAllocationGranularity_flags Granularity) {
+  uint64_t PageSize;
+  hipMemAllocationProp Prop = {};
+  Prop.type = hipMemAllocationTypePinned;
+  Prop.location.type = hipMemLocationTypeDevice;
+  Prop.location.id = device_id;
+  // TODO: I could not find any documentation regarding the compressionType in
+  // HIP. I will leave unitialized a.t.m.
+  // Prop.allocFlags.compressionType = CU_MEM_ALLOCATION_COMP_GENERIC;
+
+  DeviceRTErrCheck(
+      hipMemGetAllocationGranularity(&PageSize, &Prop, Granularity));
+  DEBUG(std::cout << "Page Size is : " << PageSize << "\n";)
+  return PageSize;
+}
+
+uint64_t getReccommendedPageSize(int device_id) {
+  return getPageSize(device_id, hipMemAllocationGranularityRecommended);
+}
+
+uint64_t getMinPageSize(int device_id) {
+  return getPageSize(device_id, hipMemAllocationGranularityMinimum);
+}
+
+MemoryBlob::MemoryBlob(uintptr_t Addr, uintptr_t sz, int device_id)
+    : BlobAddr(Addr), Size(sz), DeviceID((device_id)) {
+  hipMemAllocationProp Prop = {};
+  Prop.type = hipMemAllocationTypePinned;
+  Prop.location.type = hipMemLocationTypeDevice;
+  Prop.location.id = device_id;
+
+  DeviceRTErrCheck(hipMemCreate(&AHandle, Size, &Prop, 0));
+  DeviceRTErrCheck(hipMemMap((void *)Addr, Size, 0, AHandle, 0));
+
+  hipMemAccessDesc ADesc = {};
+  ADesc.location.type = hipMemLocationTypeDevice;
+  ADesc.location.id = device_id;
+  ADesc.flags = hipMemAccessFlagsProtReadWrite;
+
+  // Sets address
+  DEBUG(std::cout << "Setting Access 'RW' to " << (void *)Addr << " with size "
+                  << Size << "\n");
+  DeviceRTErrCheck(hipMemSetAccess((void *)Addr, Size, &ADesc, 1));
+  return;
+}
+
+MemoryBlob::MemoryBlob(MemoryBlob &&other) noexcept
+    : AHandle(other.AHandle), BlobAddr(other.BlobAddr), Size(other.Size),
+      DeviceID(other.DeviceID) {}
+
+void *ReserveVirtualAddress(void *req_addr, uint64_t VASize,
+                            uint64_t PageSize) {
+  DevicePtr devPtr = 0;
+
+  DEBUG(std::cout << "Requesting VASize "
+                  << (double)((double)VASize / (1024L * 1024L * 1024L))
+                  << " at Address " << std::hex << req_addr << std::dec
+                  << "\n";)
+
+  DeviceRTErrCheck(hipMemAddressReserve(
+      &devPtr, VASize, 0, reinterpret_cast<DevicePtr>(req_addr), 0));
+  DEBUG(std::cout << "Allocated VASize "
+                  << (double)((double)VASize / (1024L * 1024L * 1024L))
+                  << " at Address " << std::hex << devPtr << std::dec << "\n";)
+  return (void *)devPtr;
+}
+
+MemoryBlob &MemoryBlob::operator=(MemoryBlob &&other) noexcept {
+  if (this != &other) {
+    AHandle = other.AHandle;
+    BlobAddr = other.BlobAddr;
+    Size = other.Size;
+    DeviceID = other.DeviceID;
+  }
+  return *this;
+}
+
+void MemoryBlob::release() {
+  DeviceRTErrCheck(hipMemUnmap((void *)BlobAddr, Size));
+  DeviceRTErrCheck(hipMemRelease(AHandle));
+}
+
+void MemAddrFree(uintptr_t VA, uint64_t Size) {
+  DeviceRTErrCheck(hipMemAddressFree((void *)VA, Size));
+}
+
+}; // namespace hip
 #endif
 
 ContiguousAddrBlock::ContiguousAddrBlock(uintptr_t start, uint64_t sz)
@@ -199,7 +299,7 @@ PageManager::ReserveBestFitPage(uint64_t VASize) {
 std::pair<uintptr_t, uint64_t> PageManager::RequestExactPage(uint64_t VASize,
                                                              void *VA) {
   // We need to always reserve at least a single page
-  DEBUG(std::cout << "Requesting exact page\n";)
+  DEBUG(std::cout << "Requesting exact page at address:" << VA << "\n";)
   uint64_t ReqSize = util::RoundUp(VASize, PageSize);
   auto FreeNode = findInclusivePage((uintptr_t)VA, ReqSize);
   if (FreeNode == FreeVARanges.end())
@@ -266,6 +366,7 @@ PageManager::PageManager(uint64_t VASize, void *VA, int32_t device_id) {
                   << std::dec << " of size "
                   << ((double)TotalVASize) / (1024 * 1024) << "MB"
                   << " " << TotalVASize << " PageSize: " << PageSize / 1024.0
+                  << "KB"
                   << "\n";)
   FreeVARanges.insert(ContiguousAddrBlock{ReservedVA, TotalVASize});
 }
@@ -276,7 +377,7 @@ PageManager::~PageManager() {
                   << "\n";)
   DEBUG(std::cout << "Total Size is "
                   << ((double)TotalVASize / (1024.0 * 1024.0)) << " MB\n";)
-  cuErrCheck(cuMemAddressFree(ReservedVA, TotalVASize));
+  gpu::MemAddrFree(ReservedVA, TotalVASize);
 }
 
 /**
@@ -363,9 +464,9 @@ llvm::raw_fd_ostream &operator<<(llvm::raw_fd_ostream &os,
   for (auto &KV : MemManager.AllocatedMemory) {
     DEBUG(std::cout << "[MemoryManager] Writing dev Memory: " << KV.first
                     << " of Size: " << (uint64_t)KV.second.Size << "\n";)
-    PREFIX(Memcpy)
-    ((void *)Buffer, (void *)KV.first, KV.second.Size,
-     PREFIX(MemcpyDeviceToHost));
+    DeviceRTErrCheck(PREFIX(Memcpy)((void *)Buffer, (void *)KV.first,
+                                    KV.second.Size,
+                                    PREFIX(MemcpyDeviceToHost)));
     os << llvm::StringRef(reinterpret_cast<const char *>(&KV.first),
                           sizeof(KV.first));
     if (os.has_error()) {
