@@ -537,6 +537,6 @@ int main(int argc, char *argv[]) {
     std::cout << "Results match [Verified]\n";
     return 0;
   }
-  std::cout << "Results do not match [incorrect replay]";
+  std::cout << "Results do not match [incorrect replay]\n";
   return 1;
 }

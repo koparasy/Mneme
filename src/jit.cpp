@@ -296,7 +296,7 @@ std::string getArch() {
   hipDeviceProp_t device_prop;
 
   // Get properties of the current device
-  hipGetDeviceProperties(&device_prop, Dev);
+  DeviceRTErrCheck(hipGetDeviceProperties(&device_prop, Dev));
 
   // Get the full architecture name (e.g., gfx90a:sramecc+:xnack-)
   std::string arch_name = device_prop.gcnArchName;

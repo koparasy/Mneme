@@ -63,6 +63,6 @@ add_subdirectory(pass)
 add_subdirectory(src)
 
 if(ENABLE_TESTS)
-  #  enable_testing()
-  #  add_subdirectory(tests)
+  enable_testing()
+  add_subdirectory(tests)
 endif()

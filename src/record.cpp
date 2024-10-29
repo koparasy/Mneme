@@ -531,7 +531,7 @@ void dumpDeviceMemory(std::string fileName, HostFuncInfo &info, void **args,
     // explicit about the size of the bytes to be stored.
     DEBUG(std::cout << "Argument " << i << " Address "
                     << (void *)(*(uint64_t *)(args[i]))
-                    << "Size:" << info.h_ptr[i] << "\n";)
+                    << " Size:" << info.h_ptr[i] << "\n";)
     OutBC << StringRef(reinterpret_cast<const char *>(args[i]), info.h_ptr[i]);
   }
 
