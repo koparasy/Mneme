@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <hip/hip_runtime_api.h>
 #include <iostream>
 #include <llvm/IR/Constants.h>
 #include <numeric>
@@ -26,6 +25,7 @@ using namespace llvm;
 #include <cuda_runtime.h>
 #elif defined(ENABLE_HIP)
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #endif
 
 static cl::OptionCategory ReplayCategory("Replay Tool Options",

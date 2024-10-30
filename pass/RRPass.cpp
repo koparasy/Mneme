@@ -185,15 +185,11 @@ void deviceInstrumentation(Module &M) {
       // is we know on the host side this invocation forwards the arguments by
       // value
       errs() << "Processing Argument " << A << "\n";
-      if (!A.hasByRefAttr()) {
-        errs() << " and does not have ByVal attribute  << "
-               << DL.getTypeStoreSize(A.getType()) << "\n";
-        RRInfo.emplace_back(DL.getTypeStoreSize(A.getType()));
-      } else {
-        errs() << " and has pointer attribute  "
-               << DL.getTypeStoreSize(A.getPointeeInMemoryValueType()) << "\n";
+      if (A.hasByRefAttr() || A.hasByValAttr()) {
         RRInfo.emplace_back(
             DL.getTypeStoreSize(A.getPointeeInMemoryValueType()));
+      } else {
+        RRInfo.emplace_back(DL.getTypeStoreSize(A.getType()));
       }
     }
     RRFunctionInfoMap.insert({F, RRInfo});

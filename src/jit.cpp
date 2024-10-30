@@ -153,7 +153,7 @@ void BackEndToDeviceMod(llvm::StringRef &CodeRepr, gpu::DeviceModule &Mod) {
   // TODO: This is not good for debug runs, cuErrCheck will terminate in case of
   // an error before we output the logged errors.
   cuErrCheck(
-      cuModuleLoadDataEx(&CUMod, PTX.data(), 0, array, (void **)&values));
+      cuModuleLoadDataEx(&Mod, CodeRepr.data(), 0, array, (void **)&values));
 
 #ifdef __ENABLE_DEBUG__
   std::cout << "STDOUT\n";
@@ -276,17 +276,17 @@ std::string getArch() {
   gpu::DeviceResult Res = cuCtxGetDevice(&Dev);
   if (Res == CUDA_ERROR_INVALID_CONTEXT or !Dev)
     // TODO: is selecting device 0 correct?
-    cuErrCheck(cuDeviceGet(&CUDev, 0));
+    cuErrCheck(cuDeviceGet(&Dev, 0));
   cuErrCheck(cuCtxGetCurrent(&Ctx));
   if (!Ctx)
-    cuErrCheck(cuCtxCreate(&Ctx, 0, CUDev));
+    cuErrCheck(cuCtxCreate(&Ctx, 0, Dev));
 
   int CCMajor;
   cuErrCheck(cuDeviceGetAttribute(
-      &CCMajor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, CUDev));
+      &CCMajor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, Dev));
   int CCMinor;
   cuErrCheck(cuDeviceGetAttribute(
-      &CCMinor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, CUDev));
+      &CCMinor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, Dev));
   std::string CudaArch = "sm_" + std::to_string(CCMajor * 10 + CCMinor);
   return CudaArch;
 
