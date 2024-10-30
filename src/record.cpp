@@ -569,13 +569,16 @@ PREFIX(LaunchKernel)
   std::string func_name = W->SymbolTable[func].first;
   PREFIX(Error_t) ret;
 
+  long largestThreadID = (gridDim.x * blockDim.x) * (gridDim.y * blockDim.y) *
+                         (gridDim.z * blockDim.z);
+
+  printf("Kernel dims  ... %ld\n", largestThreadID);
   if (!W->RecordKernel(func_name, gridDim, blockDim)) {
+    printf("Skipping \n");
     DeviceRTErrCheck(deviceLaunchKernelInternal(func, gridDim, blockDim, args,
                                                 sharedMem, stream));
     return ret;
   }
-  long largestThreadID = (gridDim.x * blockDim.x) * (gridDim.y * blockDim.y) *
-                         (gridDim.z * blockDim.z);
   W->RecordedDims[func_name] = largestThreadID;
 
   printf("deviceLaunchKernel func %p name %s args %p sharedMem %zu\n", func,
