@@ -1,6 +1,6 @@
 # Record Replay Tool
 
-A simple tool allowing recording the execution of a GPU (CUDA) kernel and replaying that kernel as an independent executable.
+A simple tool allowing recording the execution of a GPU (CUDA/HIP) kernel and replaying that kernel as an independent executable.
 
 The tool operates in 3 phases. During compile time the user needs to apply a provided LLVM pass to instrument the code. The pass detects all device global variables
 and device functions and stores this information with the respective LLVM-IR in the global device memory. The compilation generates a `record-able` executable. 
@@ -14,6 +14,10 @@ auto-tune parameters such as kernel launch-bounds or kernel runtime execution pa
 
 
 ## Installation
+
+For proper installation the tools assume a proper LLVM@18 installation. For AMD this is provided by `ROCm@6.2:`. For NVIDIA systems install LLVM manually with NVIDIA support.
+
+### CUDA / NVIDIA
 
 To install the library and all the associated tools please issue the following commands:
 
@@ -31,6 +35,29 @@ cmake .. \
 -DCMAKE_CUDA_COMPILER=clang++ \
 -DLLVM_INSTALL_DIR=$(dirname $(dirname $(which clang))) \
 -DENABLE_CUDA=On \
+-DENABLE_TESTS=On \
+-DCMAKE_EXPORT_COMPILE_COMMANDS=on ../
+make
+make install
+export RR_INSTALL_DIR=${installDir}
+```
+
+### HIP / AMD 
+
+To install the library and all the associated tools please issue the following commands:
+
+```bash
+mkdir build
+cd build
+installDir="$(pwd)/install"
+cmake .. \
+-DCMAKE_BUILD_TYPE=Relwithdebinfo \
+-DCMAKE_INSTALL_PREFIX=$installDir \
+-DCMAKE_CXX_COMPILER=amdclang++ \
+-DCMAKE_C_COMPILER=amdclang \
+-DLLVM_INSTALL_DIR=$(dirname $(dirname $(which amdclang)))/llvm/ \
+-DENABLE_HIP=On \
+-DENABLE_DEBUG=On \
 -DENABLE_TESTS=On \
 -DCMAKE_EXPORT_COMPILE_COMMANDS=on ../
 make
@@ -70,8 +97,8 @@ Please check the ([RAJA](./examples/raja_vec_add//README.md)) and the cuda ([Nat
 
 - RecordReplay requires all application libraries to use share-linkage (*.so*) as RecordReplay uses `LD_PRELOAD` to overwrite the behavior of cuda memory calls.
 - RecordReplay currently supports only recording executions on the default stream. We are working on supporting multiple streams.
-- RecordReplay only support CUDA and we are working on supporting HIP programs. RecordReplay is tested with cuda@11.6.
-- RecordReplay requires a modern clang/LLVM installation and is being developed with LLVM@17.
+- RecordReplay is tested with cuda@11.6 for NVIDIA and with ROCm@6.2
+- RecordReplay requires a modern clang/LLVM installation and is being developed with LLVM@18.
 
 
 ## Environmental Variables Controlling Recording:
