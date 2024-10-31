@@ -41,7 +41,12 @@ function(CREATE_GPU_TEST exe rdc check_source blockDims gridDims args)
  target_include_directories(${exe}.${lang} PRIVATE "${CMAKE_SOURCE_DIR}/src/")
 
    if("${rdc}" STREQUAL "On")
-     set_target_properties(${exe}.${lang} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+     if (ENABLE_CUDA)
+      set_target_properties(${exe}.${lang} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+     endif()
+     if (ENABLE_HIP)
+      set_target_properties(${exe}.${lang} PROPERTIES COMPILE_FLAGS "-fgpu-rdc")
+     endif()
    endif()
 
 
@@ -69,5 +74,7 @@ CREATE_GPU_TEST(test_device_function "Off" test_device_function.cpp "-1" "-1" "4
 if (ENABLE_CUDA)
 CREATE_GPU_TEST(test_rdc "On" "test_rdc_kernel.cpp;test_rdc_main.cpp" "-1" "-1" "4096")
 endif()
+CREATE_GPU_TEST(test_function_rdc "On" "test_rdc_function_main.cpp;test_rdc_function.cpp" "-1" "-1" "4096")
+
 
 
