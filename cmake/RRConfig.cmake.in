@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Include the target file
+include("${CMAKE_CURRENT_LIST_DIR}/RRTargets.cmake")
+
+# Optionally, find additional dependencies here (if needed)
+# find_dependency(SomeOtherPackage REQUIRED)
+
+# Provide the targets in the project's namespace (MyProject::)
+set(PROJECT_NAME RR)
+set(PROJECT_VERSION @PACKAGE_VERSION@)
+
