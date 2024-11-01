@@ -1,6 +1,8 @@
-# Record Replay Tool
+# Mneme (Μνήμη)  
+*Named after the Greek goddess of memory, preserves and replays the essence of your application's execution, allowing developers to revisit, analyze, and refine specific moments in code with precision.* 
 
-A simple tool allowing recording the execution of a GPU (CUDA/HIP) kernel and replaying that kernel as an independent executable.
+## Descritpion
+"[Mneme](https://en.wikipedia.org/wiki/Mneme)" is a tool allowing recording the execution of a GPU (CUDA/HIP) kernel and replaying that kernel as an independent executable.
 
 The tool operates in 3 phases. During compile time the user needs to apply a provided LLVM pass to instrument the code. The pass detects all device global variables
 and device functions and stores this information with the respective LLVM-IR in the global device memory. The compilation generates a `record-able` executable. 
@@ -13,11 +15,11 @@ During the third and last phase the user can replay the execution of an kernel a
 auto-tune parameters such as kernel launch-bounds or kernel runtime execution parameters (e.g. Kernel Block and Grid Dimensions).
 
 
-## Installation
+### Installation
 
 For proper installation the tools assume a proper LLVM@18 installation. For AMD this is provided by `ROCm@6.2:`. For NVIDIA systems install LLVM manually with NVIDIA support.
 
-### CUDA / NVIDIA
+#### CUDA / NVIDIA
 
 To install the library and all the associated tools please issue the following commands:
 
@@ -42,7 +44,7 @@ make install
 export RR_INSTALL_DIR=${installDir}
 ```
 
-### HIP / AMD 
+#### HIP / AMD 
 
 To install the library and all the associated tools please issue the following commands:
 
@@ -89,19 +91,19 @@ and the `$RR_INSTALL_DIR/lib/librecord.so` is the library required to be pre-loa
 other cmake packages to find the LLVMPass by using `find_package(RR)`.
 
 
-## Example uses
+### Example uses
 
 Please check the ([RAJA](./examples/raja_vec_add//README.md)) and the cuda ([Native](./examples/native_cuda_vec_add/README.md)) examples.
 
-## Limitations and Known Issues
+### Limitations and Known Issues
 
-- RecordReplay requires all application libraries to use share-linkage (*.so*) as RecordReplay uses `LD_PRELOAD` to overwrite the behavior of cuda memory calls.
-- RecordReplay currently supports only recording executions on the default stream. We are working on supporting multiple streams.
-- RecordReplay is tested with cuda@11.6 for NVIDIA and with ROCm@6.2
-- RecordReplay requires a modern clang/LLVM installation and is being developed with LLVM@18.
+- Mneme requires all application libraries to use share-linkage (*.so*) as Mneme uses `LD_PRELOAD` to overwrite the behavior of cuda memory calls.
+- Mneme currently supports only recording executions on the default stream. We are working on supporting multiple streams.
+- Mneme is tested with cuda@11.6 for NVIDIA and with ROCm@6.2
+- Mneme requires a modern clang/LLVM installation and is being developed with LLVM@18.
 
 
-## Environmental Variables Controlling Recording:
+### Environmental Variables Controlling Recording:
 
 - `RR_SYMBOLS` An environmental variable specyfing which kernels need to be recorded. The variable sets the function name of the kernel (mangled). Multiple functions can be separated by comma.
 - `RR_FILE` The JSON file to store the record database metadata. If not provided the default name is `record_replay.json`
@@ -110,7 +112,7 @@ Please check the ([RAJA](./examples/raja_vec_add//README.md)) and the cuda ([Nat
 
 
 
-## Use of replay to search for near optimal configuration parameters.
+### Use of replay to search for near optimal configuration parameters.
 
 
 We provide a simple python script which internall invokers the `replay` tool to search for optimal kernel launch parameters. The script assumes that the kernel to be optimized is a flexible kernel. uses a strided loop to make
@@ -135,8 +137,9 @@ To contribute, make a pull request, with develop as the destination branch.
 
 # Release
 
-RecordReplay is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
+Mneme is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
 
+`LLNL-CODE-2000766`
 
 ## Citation
 
