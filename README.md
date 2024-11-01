@@ -1,6 +1,8 @@
-# Record Replay Tool
+# Mneme (Μνήμη) 
 
-A simple tool allowing recording the execution of a GPU (CUDA/HIP) kernel and replaying that kernel as an independent executable.
+"[Mneme](https://en.wikipedia.org/wiki/Mneme)", named after the Greek goddess of memory, preserves and replays the essence of your application's execution, allowing developers to revisit, analyze, and refine specific moments in code with precision. 
+
+It is a tool allowing recording the execution of a GPU (CUDA/HIP) kernel and replaying that kernel as an independent executable.
 
 The tool operates in 3 phases. During compile time the user needs to apply a provided LLVM pass to instrument the code. The pass detects all device global variables
 and device functions and stores this information with the respective LLVM-IR in the global device memory. The compilation generates a `record-able` executable. 
@@ -95,10 +97,10 @@ Please check the ([RAJA](./examples/raja_vec_add//README.md)) and the cuda ([Nat
 
 ## Limitations and Known Issues
 
-- RecordReplay requires all application libraries to use share-linkage (*.so*) as RecordReplay uses `LD_PRELOAD` to overwrite the behavior of cuda memory calls.
-- RecordReplay currently supports only recording executions on the default stream. We are working on supporting multiple streams.
-- RecordReplay is tested with cuda@11.6 for NVIDIA and with ROCm@6.2
-- RecordReplay requires a modern clang/LLVM installation and is being developed with LLVM@18.
+- Mneme requires all application libraries to use share-linkage (*.so*) as Mneme uses `LD_PRELOAD` to overwrite the behavior of cuda memory calls.
+- Mneme currently supports only recording executions on the default stream. We are working on supporting multiple streams.
+- Mneme is tested with cuda@11.6 for NVIDIA and with ROCm@6.2
+- Mneme requires a modern clang/LLVM installation and is being developed with LLVM@18.
 
 
 ## Environmental Variables Controlling Recording:
@@ -135,7 +137,7 @@ To contribute, make a pull request, with develop as the destination branch.
 
 # Release
 
-RecordReplay is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
+Mneme is released under Apache License (Version 2.0) with LLVM exceptions. For more details, please see the [LICENSE](./LICENSE)
 
 
 ## Citation
