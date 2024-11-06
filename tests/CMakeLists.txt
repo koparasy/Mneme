@@ -42,6 +42,10 @@ function(CREATE_GPU_TEST exe rdc check_source blockDims gridDims args)
 
    if("${rdc}" STREQUAL "On")
      set_target_properties(${exe}.${lang} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+     if (ENABLE_HIP)
+       target_compile_options(${exe}.${lang} PRIVATE -fgpu-rdc)
+       target_link_options(${exe}.${lang} PRIVATE -fgpu-rdc)
+     endif()
    endif()
 
 
@@ -66,8 +70,17 @@ CREATE_GPU_TEST(test_redirection "Off" test_redirection.cpp "64, 128, 256, 512, 
 CREATE_GPU_TEST(test_free "Off" test_free.cpp "-1" "-1" "4096")
 CREATE_GPU_TEST(test_device_function "Off" test_device_function.cpp "-1" "-1" "4095")
 
-if (ENABLE_CUDA)
-CREATE_GPU_TEST(test_rdc "On" "test_rdc_kernel.cpp;test_rdc_main.cpp" "-1" "-1" "4096")
+# This test tests whether we can link with an object file that contains a device function
+CREATE_GPU_TEST(test_rdc_device "On" "test_rdc_device_kernel.cpp;test_rdc_device_main.cpp" "-1" "-1" "4096")
+
+# This test tests whether we can call/link with an kernel defined on a different translation unit 
+CREATE_GPU_TEST(test_rdc_global "On" "test_rdc_global_kernel.cpp;test_rdc_global_main.cpp" "-1" "-1" "4096")
+
+if(ENABLE_HIP)
+SET(lang HIP)
+else()
+SET(lang CUDA)
 endif()
+set_tests_properties("test_rdc_device.${lang}" PROPERTIES WILL_FAIL TRUE)
 
 

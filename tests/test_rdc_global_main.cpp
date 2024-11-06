@@ -1,8 +1,12 @@
 #include "device_types.hpp"
 #include "macro.hpp"
-#include <iostream>
+#if ENALBE_CUDA
+#include <cuda_runtime.h>
+#elif defined(ENABLE_HIP)
+#include <hip/hip_runtime.h>
+#endif
 
-// Declaration of the kernel from another source file
+#include <iostream>
 __global__ void kernel_function(double *a);
 
 int main() {
