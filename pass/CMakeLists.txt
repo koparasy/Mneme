@@ -10,6 +10,12 @@ endif()
 
 llvm_map_components_to_libnames(llvm_libs all)
 
+if (ENABLE_CUDA)
+target_compile_definitions(RRPass PRIVATE -DENABLE_CUDA -DENABLE_DEBUG)
+elseif(ENABLE_HIP)
+  target_compile_definitions(RRPass PRIVATE -DENABLE_HIP -DENABLE_DEBUG)
+endif()
+
 target_link_libraries(RRPass PRIVATE ${llvm_libs})
 target_include_directories(RRPass PRIVATE "${PROJECT_SOURCE_DIR}/src")
 

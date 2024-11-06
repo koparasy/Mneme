@@ -66,6 +66,12 @@ using namespace llvm;
 //-----------------------------------------------------------------------------
 namespace {
 
+#ifdef ENABLE_CUDA
+constexpr auto RRLinkage = llvm::GlobalValue::LinkageTypes::ExternalLinkage;
+#elif defined(ENABLE_HIP)
+constexpr auto RRLinkage = llvm::GlobalValue::LinkageTypes::ExternalWeakLinkage;
+#endif
+
 struct RRFunctionInfo {
   SmallVector<uint64_t, 8> ArgSize;
 };
@@ -131,9 +137,9 @@ static void createRRModuleDevice(Module &M) {
   Constant *ClonedModule = ConstantDataArray::get(
       M.getContext(),
       ArrayRef<uint8_t>((const uint8_t *)ModuleIR.data(), ModuleIR.size()));
-  auto *GV = new GlobalVariable(
-      M, ClonedModule->getType(), /* isConstant */ true,
-      GlobalValue::ExternalLinkage, ClonedModule, "record_replay_module");
+  auto *GV =
+      new GlobalVariable(M, ClonedModule->getType(), /* isConstant */ true,
+                         RRLinkage, ClonedModule, "record_replay_module");
   appendToUsed(M, {GV});
 #if ENABLE_HIP
   // TODO: We need to provide a unique identifier in the sections. Probably
@@ -205,9 +211,9 @@ void deviceInstrumentation(Module &M) {
       ArrayType *RuntimeConstantArrayTy =
           ArrayType::get(Int64Ty, KV.second.size());
       Constant *CA = ConstantDataArray::get(M.getContext(), KV.second);
-      auto *Elements = new GlobalVariable(
-          M, RuntimeConstantArrayTy, true, GlobalValue::ExternalLinkage, CA,
-          "_record_replay_elements_" + KV.first->getName());
+      auto *Elements =
+          new GlobalVariable(M, RuntimeConstantArrayTy, true, RRLinkage, CA,
+                             "_record_replay_elements_" + KV.first->getName());
 
       Constant *Index = ConstantInt::get(Int64Ty, 0, false);
       Constant *GVPtr =
@@ -215,7 +221,7 @@ void deviceInstrumentation(Module &M) {
       Constant *NumElems = ConstantInt::get(Int64Ty, KV.second.size(), false);
       Constant *CS = ConstantStruct::get(FunctionInfoTy, {NumElems, GVPtr});
       auto *GV = new GlobalVariable(
-          M, FunctionInfoTy, true, GlobalValue::ExternalLinkage, CS,
+          M, FunctionInfoTy, true, RRLinkage, CS,
           generateRecordReplayKernelName(KV.first->getName()));
 #ifdef ENABLE_CUDA
       appendToUsed(M, {GV});
@@ -228,7 +234,7 @@ void deviceInstrumentation(Module &M) {
           FunctionInfoTy,
           {NumElems, ConstantPointerNull::get(PointerType::get(Int64Ty, 0))});
       auto *GV = new GlobalVariable(
-          M, FunctionInfoTy, true, GlobalValue::ExternalLinkage, CS,
+          M, FunctionInfoTy, true, RRLinkage, CS,
           generateRecordReplayKernelName(KV.first->getName()));
     }
   }
@@ -270,8 +276,7 @@ void deviceInstrumentation(Module &M) {
   std::replace(IRName.begin(), IRName.end(), '/', '_');
   std::replace(IRName.begin(), IRName.end(), '-', '_');
 
-  auto *GVIR = new GlobalVariable(M, ModuleIRTy, true,
-                                  GlobalValue::ExternalLinkage, CS, IRName);
+  auto *GVIR = new GlobalVariable(M, ModuleIRTy, true, RRLinkage, CS, IRName);
 
 #ifdef ENABLE_CUDA
   appendToUsed(M, {GV});
@@ -314,10 +319,10 @@ CreateGlobalVariable(Module &M, StringRef globalName) {
   StructType *FunctionInfoTy = getRecordReplayFuncDescTy(M);
 
   auto ASpace = M.getDataLayout().getDefaultGlobalsAddressSpace();
-  auto *GVStub = new GlobalVariable(
-      M, FunctionInfoTy, false /*isConstant=*/, GlobalValue::ExternalLinkage,
-      UndefValue::get(FunctionInfoTy), globalName, nullptr,
-      llvm::GlobalValue::NotThreadLocal, ASpace);
+  auto *GVStub =
+      new GlobalVariable(M, FunctionInfoTy, false /*isConstant=*/, RRLinkage,
+                         UndefValue::get(FunctionInfoTy), globalName, nullptr,
+                         llvm::GlobalValue::NotThreadLocal, ASpace);
 
   GVStub->setAlignment(MaybeAlign(8));
 
@@ -326,7 +331,7 @@ CreateGlobalVariable(Module &M, StringRef globalName) {
       M.getContext(), ArrayRef<uint8_t>((const uint8_t *)globalName.data(),
                                         globalName.size() + 1));
   auto *GVName = new GlobalVariable(M, VName->getType(), /* isConstant */ true,
-                                    GlobalValue::ExternalLinkage, VName);
+                                    RRLinkage, VName);
   GVName->setAlignment(MaybeAlign(1));
 
   return std::make_pair(GVStub, GVName);
