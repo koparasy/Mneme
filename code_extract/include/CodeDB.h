@@ -10,7 +10,7 @@ class ASTUnit;
 
 /// @brief Stores uniquely identifying information for AST nodes of interest.
 class ObjInfo {
-  std::string const &name;
+  std::string const name;
   clang::Decl *decl;
   clang::Decl *def = nullptr;
   bool defInSameTU = false;
@@ -18,7 +18,7 @@ class ObjInfo {
   clang::Decl *getDef() const { return def ? def : decl; }
 
 public:
-  ObjInfo(std::string const &name, clang::Decl *mainDecl,
+  ObjInfo(std::string name, clang::Decl *mainDecl,
           clang::Decl *defDecl = nullptr)
       : name(name), decl(mainDecl), def(defDecl), defInSameTU(defDecl) {}
   void addDefinitionDecl(clang::Decl *defDecl) { def = defDecl; }
@@ -27,7 +27,7 @@ public:
   clang::Decl const *getDefiniton() const { return getDef(); }
 
   bool isDefInSameTU() const { return defInSameTU; }
-  std::string getName() const { return name; }
+  std::string const getName() const { return name; }
 };
 
 class CodeDB {
