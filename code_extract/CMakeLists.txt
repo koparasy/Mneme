@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.31)
+cmake_minimum_required(VERSION 3.28)
 project("code_extractor")
 set(TOOL_NAME "code-extract")
 

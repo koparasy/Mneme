@@ -1,5 +1,7 @@
 #pragma once
+#include <string>
 #include <unordered_map>
+#include <memory>
 
 namespace clang {
 class Decl;
