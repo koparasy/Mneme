@@ -3,7 +3,7 @@
 #===============================================================================
 
 # Compiler can be set below, or via environment variable
-CC        = nvcc
+CC        = clang++
 OPTIMIZE  = yes
 DEBUG     = no
 ARCH      = sm_60
@@ -14,7 +14,7 @@ LAUNCHER  =
 # Program name & source code list
 #===============================================================================
 
-program = main
+program = main.out
 
 source = main.cu
 
@@ -25,10 +25,10 @@ obj = $(source:.cu=.o)
 #===============================================================================
 
 # Standard Flags
-CFLAGS := $(EXTRA_CFLAGS) -std=c++14 -Xcompiler -Wall -arch=$(ARCH)
+CFLAGS := $(EXTRA_CFLAGS) -std=c++14 -Wall --cuda-gpu-arch=$(ARCH) -pthread
 
 # Linker Flags
-LDFLAGS = 
+LDFLAGS = -L/usr/lib/cuda/lib64 -lcudart_static -ldl -lrt
 
 # Debug Flags
 ifeq ($(DEBUG),yes)
@@ -42,7 +42,7 @@ ifeq ($(OPTIMIZE),yes)
 endif
 
 ifeq ($(VERIFY),yes)
-  CFLAGS += -DVERIFY -Xcompiler -fopenmp
+  CFLAGS += -DVERIFY -fopenmp
 endif
 #===============================================================================
 # Targets to Build

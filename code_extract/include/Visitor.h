@@ -1,13 +1,9 @@
 #pragma once
 
-#include <queue>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
 #include "CodeDB.h"
 #include "VisitManager.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Frontend/ASTUnit.h"
 
 namespace clang {
 class ASTContext;
@@ -18,11 +14,12 @@ class VarDecl;
 class CodeExtractVisitor
     : public clang::RecursiveASTVisitor<CodeExtractVisitor> {
   CodeDB &codedb;
+  clang::ASTUnit &unit;
   clang::ASTContext &ctx;
 
 public:
-  CodeExtractVisitor(CodeDB &db, clang::ASTContext &astCtx)
-      : codedb(db), ctx(astCtx) {}
+  CodeExtractVisitor(CodeDB &db, clang::ASTUnit &astUnit)
+      : codedb(db), unit(astUnit), ctx(astUnit.getASTContext()) {}
   bool VisitVarDecl(clang::VarDecl *decl);
   bool VisitFunctionDecl(clang::FunctionDecl *decl);
   bool VisitRecordDecl(clang::RecordDecl *decl);
@@ -39,5 +36,5 @@ public:
   bool VisitDeclRefExpr(clang::DeclRefExpr *decl);
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *expr);
   // Custom Defined
-  void VisitParms(clang::FunctionDecl const* defDecl);
+  void VisitParms(clang::FunctionDecl const *defDecl);
 };

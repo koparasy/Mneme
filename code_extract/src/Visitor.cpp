@@ -1,18 +1,19 @@
 #include "Visitor.h"
 
+#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
-
-#include <iostream>
+#include "clang/Frontend/ASTUnit.h"
 
 namespace helper {
 template <typename T>
-void storeDecl(T *decl, CodeDB &cdb, std::string name = "") {
+void storeDecl(T *decl, clang::ASTUnit const &unit, CodeDB &cdb,
+               std::string name = "") {
   // Make use of compile-time polymorphism
   if (name.empty())
     name = decl->getQualifiedNameAsString();
   clang::Decl *defDecl = decl->getDefinition();
   if (!cdb.isRegistered(name)) {
-    cdb.registerDecl(name, decl, defDecl);
+    cdb.registerDecl(unit, name, decl, defDecl);
   } else {
     if (defDecl)
       cdb.addDefinitionDecl(name, defDecl);
@@ -20,12 +21,16 @@ void storeDecl(T *decl, CodeDB &cdb, std::string name = "") {
 }
 
 template <typename T>
-T const *visitAndRegister(clang::NamedDecl const *decl, VisitManager &vm,
-                          CodeDB const &cdb) {
+std::tuple<T const *, bool> visitAndRegister(clang::NamedDecl const *decl,
+                                             VisitManager &vm,
+                                             CodeDB const &cdb) {
   std::string name = decl->getQualifiedNameAsString();
   if (vm.isVisited(name))
-    return static_cast<T const*>(vm.getVisitedObj(name)->getDefiniton());
+    return {static_cast<T const *>(vm.getVisitedObj(name)->getDefiniton()),
+            false};
 
+  if (!cdb.isRegistered(name))
+    decl->dump();
   assert(cdb.isRegistered(name) && "All decl to visit should be registered!");
   auto objInfo = cdb.getObjInfoOrNull(name);
 
@@ -34,7 +39,7 @@ T const *visitAndRegister(clang::NamedDecl const *decl, VisitManager &vm,
   vm.markVisited(name, objInfo);
   vm.registerDecl(defDecl);
 
-  return defDecl;
+  return {defDecl, true};
 }
 
 /// @brief Checks if the given input is either of the types specifed in the
@@ -71,12 +76,16 @@ clang::RecordDecl *getAsRecordType(clang::QualType qt) {
   return getUnderlyingCanonicalType(qt)->getAsRecordDecl();
 }
 
+// Use the fact that builtin functions are typically prepended with "__"
+bool isPotentialBuiltinByName(std::string const &name) {
+  return name.size() > 2 && '_' == name[0] && '_' == name[1];
+}
+
 bool handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
   auto recordDecl = helper::getAsRecordType(qt);
-  if (!recordDecl)
+  if (!recordDecl || isPotentialBuiltinByName(recordDecl->getNameAsString()))
     return true;
 
-  // We will typically not find RecordDecls within function bodies or init
   // expressions Hence, we need to visit them when we encounter either their var
   // decl or static function call (unsupported as of yet).
   helper::visitAndRegister<clang::RecordDecl>(recordDecl, vm, codedb);
@@ -90,22 +99,24 @@ bool handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
 bool CodeExtractVisitor::VisitVarDecl(clang::VarDecl *decl) {
   if (!helper::isGlobalVar(decl))
     return true;
-  helper::storeDecl(decl, codedb);
+  helper::storeDecl(decl, unit, codedb);
   return true;
 }
 
 bool CodeExtractVisitor::VisitFunctionDecl(clang::FunctionDecl *decl) {
-  helper::storeDecl(decl, codedb);
+  helper::storeDecl(decl, unit, codedb);
   return true;
 }
 
 bool CodeExtractVisitor::VisitRecordDecl(clang::RecordDecl *decl) {
-  helper::storeDecl(decl, codedb);
+  helper::storeDecl(decl, unit, codedb);
   return true;
 }
 
 bool MatchVisitor::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   auto ctor = expr->getConstructor();
+  if (helper::isPotentialBuiltinByName(ctor->getNameAsString()))
+    return true;
   helper::visitAndRegister<clang::RecordDecl>(ctor->getParent(), vm, codedb);
   return true;
 }
@@ -113,10 +124,16 @@ bool MatchVisitor::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
 bool MatchVisitor::VisitDeclRefExpr(clang::DeclRefExpr *declRef) {
   // Need to filter out global varDeclRef...
   auto varDecl = llvm::dyn_cast<clang::VarDecl>(declRef->getDecl());
-  if (!varDecl || !helper::isGlobalVar(varDecl))
+  // Need to filter out cuda internals, for now filter all device objects.
+  if (!varDecl || !helper::isGlobalVar(varDecl) ||
+      varDecl->hasAttr<clang::CUDADeviceAttr>() ||
+      varDecl->hasAttr<clang::BuiltinAttr>())
     return true;
 
-  auto defDecl = helper::visitAndRegister<clang::VarDecl>(varDecl, vm, codedb);
+  auto [defDecl, visitBody] =
+      helper::visitAndRegister<clang::VarDecl>(varDecl, vm, codedb);
+  if (!visitBody)
+    return true;
   assert(
       defDecl->hasDefinition() &&
       "We should have seen this variable's decl before unless it is external!");
@@ -139,9 +156,13 @@ bool MatchVisitor::VisitDeclRefExpr(clang::DeclRefExpr *declRef) {
 bool MatchVisitor::VisitCallExpr(clang::CallExpr *callExpr) {
   auto decl = callExpr->getDirectCallee();
   assert(decl && "As of now we only support function decls as callees!");
-  auto defDecl =
+
+  if (helper::isPotentialBuiltinByName(decl->getNameAsString()))
+    return true;
+
+  auto [defDecl, visitBody] =
       helper::visitAndRegister<clang::FunctionDecl>(decl, vm, codedb);
-  if (!defDecl->hasBody())
+  if (!visitBody || !defDecl->hasBody())
     return true;
   vm.addToVisit(defDecl->getBody());
 

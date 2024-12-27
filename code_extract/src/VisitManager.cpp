@@ -1,19 +1,10 @@
 #include "VisitManager.h"
 #include "Visitor.h"
 
-#include <fstream>
 #include <iostream>
 #include <sstream>
 
-#include "clang/ASTMatchers/ASTMatchFinder.h"
-#include "clang/ASTMatchers/ASTMatchers.h"
-#include "clang/Frontend/CompilerInstance.h"
-#include "clang/Tooling/Tooling.h"
-
 #include "llvm/Support/raw_ostream.h"
-
-namespace ct = clang::tooling;
-namespace matcher = clang::ast_matchers;
 
 void VisitManager::registerDecl(clang::VarDecl const *decl) {
   declRefs.push_back(decl);
@@ -59,14 +50,18 @@ std::string VisitManager::getParamInstantiationsAsString(
   /// TODO: this
   for (int i = 0; i < numParams; i++) {
     auto expr = fnDecl->parameters()[i];
-    std::string typeString = expr->getType().getAsString();
-    paramInstStream << typeString << " p" << i + 1 << ";\n";
+    std::string typeString = expr->getType().getCanonicalType().getAsString();
+    auto prefixEnd = std::min(typeString.find_last_of(')'), typeString.size());
+    std::string prefix = typeString.substr(0, prefixEnd);
+    std::string suffix = typeString.substr(prefixEnd);
+    paramInstStream << prefix << " p" << i + 1 << suffix << ";\n";
   }
 
   return paramInstStream.str();
 }
 
-void VisitManager::emitStandaloneFile(std::string &output) {
+void VisitManager::emitStandaloneFile(std::string &output,
+                                      std::string const &configString) {
   llvm::raw_string_ostream ss(output);
 
   for (auto &inc : includes) {
@@ -94,6 +89,9 @@ void VisitManager::emitStandaloneFile(std::string &output) {
   ss << "int main(int argc, char *argv[]) {\n"
      << getParamInstantiationsAsString(body) << body->getNameAsString();
 
+  // Attach configstring, for regular C++ functions this should be empty...
+  ss << configString;
+
   // Build function call
   auto numParams = body->getNumParams();
   int paramCount = 1;
@@ -105,39 +103,6 @@ void VisitManager::emitStandaloneFile(std::string &output) {
     ss << "p" << paramCount;
   ss << ");\n";
   ss << "}\n";
-}
-
-void VisitManager::emitAndCompilePrimaryFile(std::string const &filename,
-                                             std::string const &objName) {
-  // First dump everything to a file
-  std::ofstream outFile(filename);
-
-  if (!outFile) {
-    std::cerr << "Error creating file " << filename << std::endl;
-    return;
-  }
-  std::string code;
-
-  emitStandaloneFile(code);
-
-  outFile << code;
-  outFile.close();
-
-  // Then clang-format
-  std::string command = "clang-format -i " + filename;
-  if (system(command.c_str()) != 0)
-    std::cerr << "Formatting failed!" << std::endl;
-
-  // Then compile
-  command = "clang++ -o " + objName + " " + filename;
-  if (system(command.c_str()) != 0) {
-    std::cerr << "Compilation failed!" << std::endl;
-  } else {
-    std::cout << "Compilation successful!" << std::endl;
-  }
-
-  /// FIXME: We need to add a lot more here....should not be restrited to a
-  /// specific compiler + include paths, link libs etc.
 }
 
 void VisitManager::pullPrimaryFnContext() {

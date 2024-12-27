@@ -4,8 +4,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "llvm/Support/Casting.h"
-
 #include "CodeDB.h"
 
 namespace clang {
@@ -34,10 +32,10 @@ public:
 
   /// @brief Check if a named decl is visited or not.
   /// @param name Name (fully qualified) of the decl to check.
-  bool isVisited(std::string const& name);
+  bool isVisited(std::string const &name);
 
   /// @brief Gets the the visited objInfo by name.
-  ObjInfo const* getVisitedObj(std::string const& name);
+  ObjInfo const *getVisitedObj(std::string const &name);
 
   /// @brief Marks a named decl visited.
   /// @param name Name (fully qualified) of the decl to mark.
@@ -70,13 +68,10 @@ public:
   /// @brief Emits the standalone code file containing the searched function and
   /// all other dependencies into output.
   /// @param output String to dump the full standalone code into.
-  void emitStandaloneFile(std::string &output);
-
-  /// @brief Emits the standalone extracted code to filename and compiles it to objName.
-  /// @param filename File name extracted code is written to.
-  /// @param objName Name of the ouput compiled object.
-  void emitAndCompilePrimaryFile(std::string const& filename,
-                                 std::string const& objName = "out");
+  /// @param configString For CUDA global functions specifying grid, block and
+  /// thread size.
+  void emitStandaloneFile(std::string &output,
+                          std::string const &configString = "");
 
   /// @brief Given a function declaration, pulls all dependencies necessary to
   /// make the function compile standalone.

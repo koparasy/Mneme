@@ -1,17 +1,14 @@
 #pragma once
-#include <queue>
-#include <unordered_map>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
-#include "llvm/Support/Casting.h"
+#include "clang/Tooling/CompilationDatabase.h"
+#include "clang/Tooling/Tooling.h"
 
 #include "CodeDB.h"
 
 namespace clang {
-namespace tooling {
-class ClangTool;
-}
 class ASTUnit;
 class FunctionDecl;
 } // namespace clang
@@ -19,13 +16,14 @@ class FunctionDecl;
 /// @brief Exposes API to pull a single function by name and manages other tool
 /// aspects.
 class ToolManager {
-  clang::tooling::ClangTool const *tool;
+  std::unique_ptr<clang::tooling::CompilationDatabase> compDb;
+  std::unique_ptr<clang::tooling::ClangTool> tool;
   ObjInfo *primaryFn;
   std::vector<std::unique_ptr<clang::ASTUnit>> asts;
   std::unique_ptr<CodeDB> db;
 
 public:
-  explicit ToolManager(clang::tooling::ClangTool *tool);
+  ToolManager(std::string const &projectDirPath);
 
   /// @brief Finds the function declaration by name.
   /// @param fnName Name of the function declaration to find.
@@ -34,7 +32,8 @@ public:
   ObjInfo *findFnDeclByName(std::string const &fnName);
 
   /// @brief Pulls the function definition for the specified function name and
-  /// all its dependencies.
+  /// all its dependencies into file <fn-name>.<fn-source-extn> and compiles it
+  /// to <fn-name>.o.
   /// @param fnName Name of the function to get dependencies for.
   void getStandaloneFnContext(std::string const &fnName);
 };

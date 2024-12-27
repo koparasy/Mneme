@@ -1,7 +1,10 @@
 #pragma once
+#include "clang/Basic/LLVM.h"
+#include "clang/Frontend/ASTUnit.h"
+
+#include <memory>
 #include <string>
 #include <unordered_map>
-#include <memory>
 
 namespace clang {
 class Decl;
@@ -10,6 +13,7 @@ class ASTUnit;
 
 /// @brief Stores uniquely identifying information for AST nodes of interest.
 class ObjInfo {
+  clang::ASTUnit const &unit;
   std::string const name;
   clang::Decl *decl;
   clang::Decl *def = nullptr;
@@ -18,9 +22,10 @@ class ObjInfo {
   clang::Decl *getDef() const { return def ? def : decl; }
 
 public:
-  ObjInfo(std::string name, clang::Decl *mainDecl,
-          clang::Decl *defDecl = nullptr)
-      : name(name), decl(mainDecl), def(defDecl), defInSameTU(defDecl) {}
+  ObjInfo(clang::ASTUnit const &astUnit, std::string name,
+          clang::Decl *mainDecl, clang::Decl *defDecl = nullptr)
+      : unit(astUnit), name(name), decl(mainDecl), def(defDecl),
+        defInSameTU(defDecl) {}
   void addDefinitionDecl(clang::Decl *defDecl) { def = defDecl; }
 
   clang::Decl *getDefiniton() { return getDef(); }
@@ -28,6 +33,9 @@ public:
 
   bool isDefInSameTU() const { return defInSameTU; }
   std::string const getName() const { return name; }
+  clang::StringRef const getSourceFile() const {
+    return unit.getOriginalSourceFileName();
+  }
 };
 
 class CodeDB {
@@ -51,9 +59,9 @@ public:
   bool isRegistered(std::string const &name) const {
     return db.find(name) != db.end();
   }
-  void registerDecl(std::string name, clang::Decl *decl,
-                    clang::Decl *defDecl = nullptr) {
-    db.try_emplace(name, std::make_unique<ObjInfo>(name, decl, defDecl));
+  void registerDecl(clang::ASTUnit const &unit, std::string name,
+                    clang::Decl *decl, clang::Decl *defDecl = nullptr) {
+    db.try_emplace(name, std::make_unique<ObjInfo>(unit, name, decl, defDecl));
   }
 
   ObjInfo const *getObjInfoOrNull(std::string const &name) const {

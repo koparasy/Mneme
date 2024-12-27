@@ -1,3 +1,6 @@
-*build
+build/
 test
 *venv
+.vscode/
+*.out
+*.o
