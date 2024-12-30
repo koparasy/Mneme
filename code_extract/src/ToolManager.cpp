@@ -2,6 +2,7 @@
 #include "CodeDB.h"
 #include "Visitor.h"
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -31,6 +32,14 @@ ToolManager::ToolManager(std::string const &dirPath) {
     std::cerr << errorMsg << std::endl;
     exit(1);
   }
+
+  if (compDb->getAllCompileCommands().empty()) {
+    std::cerr << "Compile commands in " << dirPath
+              << " is empty! No functions will be found even if they exist."
+              << std::endl;
+    exit(1);
+  }
+
   auto sourceFiles = compDb->getAllFiles();
   tool = std::make_unique<ct::ClangTool>(*compDb, sourceFiles);
 

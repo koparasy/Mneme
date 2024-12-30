@@ -4,3 +4,5 @@ test
 .vscode/
 *.out
 *.o
+*.cache
+compile_commands.json

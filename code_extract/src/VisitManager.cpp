@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "clang/AST/Attrs.inc"
 #include "llvm/Support/raw_ostream.h"
 
 void VisitManager::registerDecl(clang::VarDecl const *decl) {
@@ -85,14 +86,21 @@ void VisitManager::emitStandaloneFile(std::string &output,
 
   auto body =
       static_cast<clang::FunctionDecl const *>(primaryFn.getDefiniton());
+  bool cudaKernel = body->hasAttr<clang::CUDAGlobalAttr>();
+
   // Building main
-  ss << "int main(int argc, char *argv[]) {\n"
-     << getParamInstantiationsAsString(body) << body->getNameAsString();
+  ss << "int main(int argc, char *argv[]) {\n";
 
-  // Attach configstring, for regular C++ functions this should be empty...
-  ss << configString;
-
+  // If we have a cuda kernel, we should add the config string
+  if (cudaKernel)
+    ss << "dim3 grid;\n"
+       << "dim3 block;\n";
+  ss << getParamInstantiationsAsString(body);
+  
   // Build function call
+  ss << body->getNameAsString();
+  if (cudaKernel)
+    ss << "<<<grid, block>>>";
   auto numParams = body->getNumParams();
   int paramCount = 1;
   ss << "(";
