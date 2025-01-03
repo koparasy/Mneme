@@ -3,6 +3,7 @@
 #include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
 #include "clang/Frontend/ASTUnit.h"
+#include <iostream>
 
 namespace helper {
 template <typename T>
@@ -81,19 +82,36 @@ bool isPotentialBuiltinByName(std::string const &name) {
   return name.size() > 2 && '_' == name[0] && '_' == name[1];
 }
 
-bool handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
-  auto recordDecl = helper::getAsRecordType(qt);
-  if (!recordDecl || isPotentialBuiltinByName(recordDecl->getNameAsString()))
+bool handleRecordDecl(clang::RecordDecl const *recordDecl, VisitManager &vm,
+                      CodeDB const &codedb) {
+  auto extFileName =
+      codedb.getExtSource(recordDecl->getQualifiedNameAsString());
+  vm.registerInclude(extFileName);
+
+  // If externally defined (or built-in), do not include def as we will include
+  // the file itself.
+  if (extFileName != "" ||
+      isPotentialBuiltinByName(recordDecl->getNameAsString()))
     return true;
 
-  // expressions Hence, we need to visit them when we encounter either their var
-  // decl or static function call (unsupported as of yet).
+  // We will typically not find RecordDecls within function bodies or init
+  // expressions. Hence, we need to visit them when we encounter either their
+  // var decl or static function call (unsupported as of yet).
   helper::visitAndRegister<clang::RecordDecl>(recordDecl, vm, codedb);
 
   // Also we do not want to visit anything else from here as we will visit the
   // function calls separately
   return true;
 }
+
+bool handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
+  auto recordDecl = helper::getAsRecordType(qt);
+
+  if (!recordDecl)
+    return true;
+  return handleRecordDecl(recordDecl, vm, codedb);
+}
+
 } // namespace helper
 
 bool CodeExtractVisitor::VisitVarDecl(clang::VarDecl *decl) {
@@ -110,6 +128,16 @@ bool CodeExtractVisitor::VisitFunctionDecl(clang::FunctionDecl *decl) {
 
 bool CodeExtractVisitor::VisitRecordDecl(clang::RecordDecl *decl) {
   helper::storeDecl(decl, unit, codedb);
+  auto declFile =
+      decl->getSourceRange().getBegin().printToString(ctx.getSourceManager());
+  declFile = declFile.substr(0, declFile.find_first_of(':'));
+
+  /// FIXME: For now we use a trick to figure out if the include is system-wide
+  /// or local. Typically local includes will show up as relative paths in the
+  /// code's source location. Eventually we should make this check more robust
+  /// by checking against the current project path.
+  if (declFile[0] != '.')
+    codedb.addExtSource(decl->getQualifiedNameAsString(), declFile);
   return true;
 }
 
@@ -117,7 +145,7 @@ bool MatchVisitor::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
   auto ctor = expr->getConstructor();
   if (helper::isPotentialBuiltinByName(ctor->getNameAsString()))
     return true;
-  helper::visitAndRegister<clang::RecordDecl>(ctor->getParent(), vm, codedb);
+  helper::handleRecordDecl(ctor->getParent(), vm, codedb);
   return true;
 }
 
@@ -171,7 +199,7 @@ bool MatchVisitor::VisitCallExpr(clang::CallExpr *callExpr) {
 
   if (defDecl->isCXXClassMember() && decl->isStatic()) {
     auto recordDecl = static_cast<clang::CXXMethodDecl *>(decl)->getParent();
-    helper::visitAndRegister<clang::RecordDecl>(recordDecl, vm, codedb);
+    helper::handleRecordDecl(recordDecl, vm, codedb);
   }
   return true;
 }

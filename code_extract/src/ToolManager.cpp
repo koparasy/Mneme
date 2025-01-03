@@ -24,7 +24,8 @@ getCompilationFlags(std::vector<std::string> const &cli,
 }
 } // namespace helper
 
-ToolManager::ToolManager(std::string const &dirPath) {
+ToolManager::ToolManager(std::string const &dirPath) : projPath(dirPath)
+{
   // Setup our tool
   std::string errorMsg;
   compDb = ct::CompilationDatabase::autoDetectFromDirectory(dirPath, errorMsg);
@@ -48,7 +49,7 @@ ToolManager::ToolManager(std::string const &dirPath) {
   db.reset(new CodeDB());
   // Build code database
   for (auto &ast : asts) {
-    CodeExtractVisitor vis(*db.get(), *ast);
+    CodeExtractVisitor vis(*db.get(), *ast, dirPath);
     // Should move this in a run function or ctor
     vis.TraverseAST(ast->getASTContext());
   }
@@ -75,7 +76,7 @@ ObjInfo *ToolManager::findFnDeclByName(std::string const &fnName) {
 
 void ToolManager::getStandaloneFnContext(std::string const &fnName) {
   primaryFn = findFnDeclByName(fnName);
-  auto fnSrcFile = primaryFn->getSourceFile();
+  auto fnSrcFile = primaryFn->getRefFile();
   bool isCuda = fnSrcFile.substr(fnSrcFile.size() - 2, 2) == "cu";
   std::string filename = fnName + (isCuda ? ".cu" : ".cpp");
   std::string objname = fnName + ".o";
@@ -106,8 +107,8 @@ void ToolManager::getStandaloneFnContext(std::string const &fnName) {
   // Then compile
   // For now only get one compilation command
   auto cli = compDb->getCompileCommands(fnSrcFile)[0].CommandLine;
-  command = cli[0] + " -o " + objname + " " + filename + " " +
-            helper::getCompilationFlags(cli, {"-c", "-o", "--driver-mode=g++"});
+  command = cli[0] + " -x cu -o " + objname + " " + filename + " " +
+            helper::getCompilationFlags(cli, {"-c", "-o", "--driver-mode=g++", "--"});
   std::cout << "Compiling " << fnName << " with command:\n"
             << command << std::endl;
   if (system(command.c_str()) != 0) {

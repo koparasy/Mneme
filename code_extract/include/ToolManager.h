@@ -1,6 +1,5 @@
 #pragma once
 #include <memory>
-#include <unordered_set>
 #include <vector>
 
 #include "clang/Tooling/CompilationDatabase.h"
@@ -21,6 +20,8 @@ class ToolManager {
   ObjInfo *primaryFn;
   std::vector<std::unique_ptr<clang::ASTUnit>> asts;
   std::unique_ptr<CodeDB> db;
+
+  std::string const& projPath;
 
 public:
   ToolManager(std::string const &projectDirPath);

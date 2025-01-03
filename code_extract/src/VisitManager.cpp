@@ -2,7 +2,9 @@
 #include "Visitor.h"
 
 #include <iostream>
+#include <ostream>
 #include <sstream>
+#include <string>
 
 #include "clang/AST/Attrs.inc"
 #include "llvm/Support/raw_ostream.h"
@@ -20,6 +22,13 @@ void VisitManager::registerDecl(clang::FunctionDecl const *decl) {
   if (decl->isCXXClassMember() && decl->isInlined())
     return;
   declRefs.push_back(decl);
+}
+
+void VisitManager::registerInclude(std::string includePath) {
+  if (includePath == "") return;
+  auto incFile = includePath.substr(includePath.rfind("include") + 7 + 1);
+
+  includes.insert(incFile);
 }
 
 bool VisitManager::isVisited(std::string const &name) {
@@ -68,6 +77,7 @@ void VisitManager::emitStandaloneFile(std::string &output,
   for (auto &inc : includes) {
     ss << "#include \"" << inc << "\"\n";
   }
+  ss << '\n';
 
   for (auto &tags : tagDecls) {
     // Same with tags, add missing semicolon!

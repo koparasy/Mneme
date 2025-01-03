@@ -2,6 +2,7 @@
 
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "CodeDB.h"
@@ -25,7 +26,7 @@ class VisitManager {
   std::vector<clang::NamedDecl const *> declRefs;
   std::vector<clang::TagDecl const *> tagDecls;
   std::unordered_map<std::string, ObjInfo const *> visitedNodes;
-  std::vector<std::string> includes;
+  std::unordered_set<std::string> includes;
 
 public:
   VisitManager(ObjInfo &pf, CodeDB const &cdb) : db(cdb), primaryFn(pf) {}
@@ -58,6 +59,9 @@ public:
   /// later.
   /// @param decl Decl of the record/enum type.
   void registerDecl(clang::TagDecl const *decl);
+
+  /// @brief Cleans up and adds the the includePath to the files to include.
+  void registerInclude(std::string includePath);
 
   /// @brief Default instantiates all function parameters for the given
   /// functionDecl. For now it can be only called once as it writes out the

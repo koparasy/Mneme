@@ -16,10 +16,11 @@ class CodeExtractVisitor
   CodeDB &codedb;
   clang::ASTUnit &unit;
   clang::ASTContext &ctx;
+  std::string const& projPath;
 
 public:
-  CodeExtractVisitor(CodeDB &db, clang::ASTUnit &astUnit)
-      : codedb(db), unit(astUnit), ctx(astUnit.getASTContext()) {}
+  CodeExtractVisitor(CodeDB &db, clang::ASTUnit &astUnit, std::string const& projPath)
+      : codedb(db), unit(astUnit), ctx(astUnit.getASTContext()), projPath(projPath) {}
   bool VisitVarDecl(clang::VarDecl *decl);
   bool VisitFunctionDecl(clang::FunctionDecl *decl);
   bool VisitRecordDecl(clang::RecordDecl *decl);
