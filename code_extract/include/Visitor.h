@@ -24,6 +24,7 @@ public:
   bool VisitVarDecl(clang::VarDecl *decl);
   bool VisitFunctionDecl(clang::FunctionDecl *decl);
   bool VisitRecordDecl(clang::RecordDecl *decl);
+  bool VisitTypedefNameDecl(clang::TypedefNameDecl *decl);
 };
 
 class MatchVisitor : public clang::RecursiveASTVisitor<MatchVisitor> {

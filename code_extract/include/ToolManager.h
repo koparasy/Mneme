@@ -20,9 +20,7 @@ class ToolManager {
   ObjInfo *primaryFn;
   std::vector<std::unique_ptr<clang::ASTUnit>> asts;
   std::unique_ptr<CodeDB> db;
-
-  std::string const& projPath;
-
+  
 public:
   ToolManager(std::string const &projectDirPath);
 

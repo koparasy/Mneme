@@ -7,13 +7,19 @@
 #include <string>
 
 #include "clang/AST/Attrs.inc"
+#include "clang/AST/Decl.h"
+#include "clang/AST/DeclBase.h"
 #include "llvm/Support/raw_ostream.h"
 
-void VisitManager::registerDecl(clang::VarDecl const *decl) {
+void VisitManager::registerDecl(clang::NamedDecl const *decl) {
   declRefs.push_back(decl);
 }
 
 void VisitManager::registerDecl(clang::TagDecl const *decl) {
+  tagDecls.push_back(decl);
+}
+
+void VisitManager::registerDecl(clang::TypedefNameDecl const *decl) {
   tagDecls.push_back(decl);
 }
 
@@ -24,11 +30,26 @@ void VisitManager::registerDecl(clang::FunctionDecl const *decl) {
   declRefs.push_back(decl);
 }
 
-void VisitManager::registerInclude(std::string includePath) {
-  if (includePath == "") return;
-  auto incFile = includePath.substr(includePath.rfind("include") + 7 + 1);
+bool VisitManager::registerInclude(std::string const &includePath) {
+  if (includePath == "" || includePath.find(".c") != std::string::npos)
+    return false;
+
+  // Obviously there is no requirement for there to be an include folder in the
+  // path but for now we assume there is for simplicity. We can also change this
+  // to match against the last '/' instead.
+  std::string incFile;
+  if (includePath.find(".h") == std::string::npos) {
+    // For potential forwarding headers, split at last '/'
+    incFile = includePath.substr(includePath.rfind("/") + 1);
+  } else
+    incFile = includePath.substr(includePath.rfind("include") + 7 + 1);
+
+  // If the include start with _, they probably are from builtins so ignore.
+  if (incFile[0] == '_')
+    return false;
 
   includes.insert(incFile);
+  return true;
 }
 
 bool VisitManager::isVisited(std::string const &name) {
@@ -75,7 +96,12 @@ void VisitManager::emitStandaloneFile(std::string &output,
   llvm::raw_string_ostream ss(output);
 
   for (auto &inc : includes) {
-    ss << "#include \"" << inc << "\"\n";
+    ss << "#include ";
+    if (inc.find('.') == std::string::npos)
+      ss << "<" << inc << ">";
+    else
+      ss << "\"" << inc << "\"";
+    ss << "\n";
   }
   ss << '\n';
 
@@ -106,7 +132,7 @@ void VisitManager::emitStandaloneFile(std::string &output,
     ss << "dim3 grid;\n"
        << "dim3 block;\n";
   ss << getParamInstantiationsAsString(body);
-  
+
   // Build function call
   ss << body->getNameAsString();
   if (cudaKernel)

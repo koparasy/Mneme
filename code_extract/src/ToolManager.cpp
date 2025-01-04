@@ -24,7 +24,7 @@ getCompilationFlags(std::vector<std::string> const &cli,
 }
 } // namespace helper
 
-ToolManager::ToolManager(std::string const &dirPath) : projPath(dirPath)
+ToolManager::ToolManager(std::string const &dirPath)
 {
   // Setup our tool
   std::string errorMsg;
@@ -46,7 +46,7 @@ ToolManager::ToolManager(std::string const &dirPath) : projPath(dirPath)
 
   // Build code database
   tool->buildASTs(asts);
-  db.reset(new CodeDB());
+  db.reset(new CodeDB(dirPath));
   // Build code database
   for (auto &ast : asts) {
     CodeExtractVisitor vis(*db.get(), *ast, dirPath);
@@ -107,7 +107,7 @@ void ToolManager::getStandaloneFnContext(std::string const &fnName) {
   // Then compile
   // For now only get one compilation command
   auto cli = compDb->getCompileCommands(fnSrcFile)[0].CommandLine;
-  command = cli[0] + " -x cu -o " + objname + " " + filename + " " +
+  command = cli[0] + " -o " + objname + " " + filename + " " +
             helper::getCompilationFlags(cli, {"-c", "-o", "--driver-mode=g++", "--"});
   std::cout << "Compiling " << fnName << " with command:\n"
             << command << std::endl;

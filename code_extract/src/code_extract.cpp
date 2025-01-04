@@ -6,10 +6,8 @@
 int main(int argc, const char **argv) {
   if (argc != 3) {
     std::cerr
-        << "Usage: code-extract path/to/dir function-name\n"; // typically the
-                                                              // compile
-                                                              // commands will
-                                                              // be in build.
+        << "Usage: code-extract path/to/dir function-name\n"
+        << "Please ensure the path points to the root folder of your project!\n";
     return 1;
   }
   std::string dirPath = argv[1];

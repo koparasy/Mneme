@@ -24,7 +24,7 @@ class VisitManager {
   ObjInfo &primaryFn;
   std::queue<clang::Stmt *> toVisitNodes;
   std::vector<clang::NamedDecl const *> declRefs;
-  std::vector<clang::TagDecl const *> tagDecls;
+  std::vector<clang::NamedDecl const *> tagDecls;
   std::unordered_map<std::string, ObjInfo const *> visitedNodes;
   std::unordered_set<std::string> includes;
 
@@ -48,7 +48,7 @@ public:
 
   /// @brief Adds a global variable declaration to be emitted to code later.
   /// @param decl Global variable declaration.
-  void registerDecl(clang::VarDecl const *decl);
+  void registerDecl(clang::NamedDecl const *decl);
 
   /// @brief Adds a function declaration to be emitted later. DO NOT call this
   /// for the primary function!
@@ -60,8 +60,14 @@ public:
   /// @param decl Decl of the record/enum type.
   void registerDecl(clang::TagDecl const *decl);
 
+  /// @brief Adds the declaration of an typedefs to be emitted
+  /// later.
+  /// @param decl Decl of the typedef type.
+  void registerDecl(clang::TypedefNameDecl const *decl);
+
   /// @brief Cleans up and adds the the includePath to the files to include.
-  void registerInclude(std::string includePath);
+  /// @return Returns wether the include file was registered or not.
+  bool registerInclude(std::string const& includePath);
 
   /// @brief Default instantiates all function parameters for the given
   /// functionDecl. For now it can be only called once as it writes out the

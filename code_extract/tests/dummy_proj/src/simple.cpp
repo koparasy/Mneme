@@ -57,11 +57,21 @@ int func8(B obj) {
     return obj.fb1() + A::f2();
 }
 
-double func9(int m) {
+typedef int myint;
+typedef int myint2_t;
+typedef myint2_t myint2;
+
+double func9(myint m) {
+    myint n = m + 1;
+    myint2 l = m * 3;
+    return n + m + l;
+}
+
+double func10(int m) {
     return std::cos(m);
 }
 
-int func10() {
+int func11() {
     std::unique_ptr<A> obj(new A());
     return obj->f1();
 }

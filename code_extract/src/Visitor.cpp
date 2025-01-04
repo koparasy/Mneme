@@ -1,11 +1,30 @@
 #include "Visitor.h"
 
-#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
+#include "clang/AST/Type.h"
+#include "clang/Basic/SourceLocation.h"
 #include "clang/Frontend/ASTUnit.h"
-#include <iostream>
 
 namespace helper {
+void addIncludeIfExternal(std::string const &name, clang::SourceLocation sloc,
+                          clang::ASTContext const &ctx, CodeDB &codedb) {
+  auto declFile = sloc.printToString(ctx.getSourceManager());
+  declFile = declFile.substr(0, declFile.find_first_of(':'));
+
+  /// FIXME: For now we use a trick to figure out if the include is system-wide
+  /// or local. Typically local includes will show up as relative paths in the
+  /// code's source location. Eventually we should make this check more robust
+  /// by checking against the current project path.
+  if (declFile[0] == '/' && declFile.find(codedb.projPath) == std::string::npos)
+    codedb.addExtSource(name, declFile);
+}
+
+bool checkPotentialInclude(clang::NamedDecl const *decl, VisitManager &vm,
+                           CodeDB const &codedb) {
+  auto extFileName = codedb.getExtSource(decl->getQualifiedNameAsString());
+  return vm.registerInclude(extFileName);
+}
+
 template <typename T>
 void storeDecl(T *decl, clang::ASTUnit const &unit, CodeDB &cdb,
                std::string name = "") {
@@ -19,6 +38,8 @@ void storeDecl(T *decl, clang::ASTUnit const &unit, CodeDB &cdb,
     if (defDecl)
       cdb.addDefinitionDecl(name, defDecl);
   }
+  addIncludeIfExternal(name, decl->getSourceRange().getBegin(),
+                       unit.getASTContext(), cdb);
 }
 
 template <typename T>
@@ -70,7 +91,7 @@ clang::Type const *getUnderlyingCanonicalType(clang::QualType const &type) {
   while (canonType->isPointerType() || canonType->isArrayType()) {
     canonType = canonType->getPointeeOrArrayElementType();
   }
-  return canonType->getUnqualifiedDesugaredType();
+  return canonType;
 }
 
 clang::RecordDecl *getAsRecordType(clang::QualType qt) {
@@ -82,17 +103,13 @@ bool isPotentialBuiltinByName(std::string const &name) {
   return name.size() > 2 && '_' == name[0] && '_' == name[1];
 }
 
-bool handleRecordDecl(clang::RecordDecl const *recordDecl, VisitManager &vm,
+void handleRecordDecl(clang::RecordDecl const *recordDecl, VisitManager &vm,
                       CodeDB const &codedb) {
-  auto extFileName =
-      codedb.getExtSource(recordDecl->getQualifiedNameAsString());
-  vm.registerInclude(extFileName);
-
   // If externally defined (or built-in), do not include def as we will include
   // the file itself.
-  if (extFileName != "" ||
+  if (checkPotentialInclude(recordDecl, vm, codedb) ||
       isPotentialBuiltinByName(recordDecl->getNameAsString()))
-    return true;
+    return;
 
   // We will typically not find RecordDecls within function bodies or init
   // expressions. Hence, we need to visit them when we encounter either their
@@ -101,17 +118,40 @@ bool handleRecordDecl(clang::RecordDecl const *recordDecl, VisitManager &vm,
 
   // Also we do not want to visit anything else from here as we will visit the
   // function calls separately
-  return true;
 }
 
-bool handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
-  auto recordDecl = helper::getAsRecordType(qt);
+// A little bit of code duplication for clarity.
+void handleTypedefs(clang::TypedefType const *typ, VisitManager &vm,
+                    CodeDB const &codedb) {
+  if (!typ)
+    return;
 
-  if (!recordDecl)
-    return true;
-  return handleRecordDecl(recordDecl, vm, codedb);
+  auto typDecl = typ->getDecl();
+  // If externally defined (or built-in), do not include def as we will
+  // include the file itself.
+  if (checkPotentialInclude(typDecl, vm, codedb) ||
+      isPotentialBuiltinByName(typDecl->getNameAsString()))
+    return;
+
+  handleTypedefs(typDecl->getUnderlyingType()->getAs<clang::TypedefType>(), vm,
+                 codedb);
+
+  visitAndRegister<clang::TypedefNameDecl>(typDecl, vm, codedb);
 }
 
+void handleVarDecl(clang::QualType qt, VisitManager &vm, CodeDB const &codedb) {
+  auto cannonType = getUnderlyingCanonicalType(qt);
+  clang::RecordDecl const *decl = helper::getAsRecordType(qt);
+  if (!decl) {
+    auto typedefType = cannonType->getAs<clang::TypedefType>();
+    // recursively visit underlying type(defs).
+    // We should hopefully
+    // create a handle typedef function that does not revisit typedef chains
+    // again if visited before.
+    handleTypedefs(typedefType, vm, codedb);
+  } else
+    handleRecordDecl(decl, vm, codedb);
+}
 } // namespace helper
 
 bool CodeExtractVisitor::VisitVarDecl(clang::VarDecl *decl) {
@@ -128,16 +168,17 @@ bool CodeExtractVisitor::VisitFunctionDecl(clang::FunctionDecl *decl) {
 
 bool CodeExtractVisitor::VisitRecordDecl(clang::RecordDecl *decl) {
   helper::storeDecl(decl, unit, codedb);
-  auto declFile =
-      decl->getSourceRange().getBegin().printToString(ctx.getSourceManager());
-  declFile = declFile.substr(0, declFile.find_first_of(':'));
+  return true;
+}
 
-  /// FIXME: For now we use a trick to figure out if the include is system-wide
-  /// or local. Typically local includes will show up as relative paths in the
-  /// code's source location. Eventually we should make this check more robust
-  /// by checking against the current project path.
-  if (declFile[0] != '.')
-    codedb.addExtSource(decl->getQualifiedNameAsString(), declFile);
+/// FIXME: We do not need to cache these as typically defs are together with decls.
+bool CodeExtractVisitor::VisitTypedefNameDecl(clang::TypedefNameDecl *decl) {
+  auto name = decl->getQualifiedNameAsString();
+  if (codedb.isRegistered(name))
+    return true;
+  codedb.registerDecl(unit, name, decl, decl);
+  helper::addIncludeIfExternal(name, decl->getSourceRange().getBegin(),
+                               unit.getASTContext(), codedb);
   return true;
 }
 
@@ -152,8 +193,14 @@ bool MatchVisitor::VisitCXXConstructExpr(clang::CXXConstructExpr *expr) {
 bool MatchVisitor::VisitDeclRefExpr(clang::DeclRefExpr *declRef) {
   // Need to filter out global varDeclRef...
   auto varDecl = llvm::dyn_cast<clang::VarDecl>(declRef->getDecl());
+  if (!varDecl)
+    return true;
+
+  // Even if the vardecls are not interesting, visit their type.
+  helper::handleVarDecl(declRef->getType(), vm, codedb);
+
   // Need to filter out cuda internals, for now filter all device objects.
-  if (!varDecl || !helper::isGlobalVar(varDecl) ||
+  if (!helper::isGlobalVar(varDecl) ||
       varDecl->hasAttr<clang::CUDADeviceAttr>() ||
       varDecl->hasAttr<clang::BuiltinAttr>())
     return true;
@@ -176,16 +223,15 @@ bool MatchVisitor::VisitDeclRefExpr(clang::DeclRefExpr *declRef) {
                        clang::IntegerLiteral, clang::StringLiteral>(varInit))
     vm.addToVisit(varInit);
 
-  // For globals that are themselves record types (for e.g., enums), we should
-  // visit their decls
-  return helper::handleVarDecl(varDecl->getType(), vm, codedb);
+  return true;
 }
 
 bool MatchVisitor::VisitCallExpr(clang::CallExpr *callExpr) {
   auto decl = callExpr->getDirectCallee();
   assert(decl && "As of now we only support function decls as callees!");
 
-  if (helper::isPotentialBuiltinByName(decl->getNameAsString()))
+  if (helper::checkPotentialInclude(decl, vm, codedb) ||
+      helper::isPotentialBuiltinByName(decl->getNameAsString()))
     return true;
 
   auto [defDecl, visitBody] =

@@ -18,7 +18,8 @@ class ObjInfo {
   clang::Decl *decl;
   clang::Decl *def = nullptr;
   bool defInSameTU = false;
-  // If this decl is external to the project, store its source file's name for include'ing later.
+  // If this decl is external to the project, store its source file's name for
+  // include'ing later.
   std::string extSourceFile = "";
 
   clang::Decl *getDef() const { return def ? def : decl; }
@@ -34,9 +35,9 @@ public:
   clang::Decl const *getDefiniton() const { return getDef(); }
 
   bool isDefInSameTU() const { return defInSameTU; }
-  
+
   std::string getName() const { return name; }
-  
+
   /// Get filename from which this specific decl is referenced.
   clang::StringRef getRefFile() const {
     return unit.getOriginalSourceFileName();
@@ -44,7 +45,7 @@ public:
 
   void addExtSourceFile(std::string file) { extSourceFile = file; }
 
-  std::string getExtSourceFile() const { return extSourceFile;}
+  std::string getExtSourceFile() const { return extSourceFile; }
 };
 
 class CodeDB {
@@ -65,6 +66,10 @@ class CodeDB {
   }
 
 public:
+  std::string const projPath;
+
+  CodeDB(std::string const &projDir) : projPath(projDir) {}
+  
   bool isRegistered(std::string const &name) const {
     return db.find(name) != db.end();
   }
@@ -94,13 +99,14 @@ public:
       db.at(name)->addDefinitionDecl(defDecl);
   }
 
-  void addExtSource(std::string const& name, std::string const& fileName) {
+  void addExtSource(std::string const &name, std::string const &fileName) {
     if (isRegistered(name))
       db.at(name)->addExtSourceFile(fileName);
   }
 
-  std::string getExtSource(std::string const& name) const {
-    if (db.find(name) == db.end()) return "";
+  std::string getExtSource(std::string const &name) const {
+    if (db.find(name) == db.end())
+      return "";
     return db.at(name)->getExtSourceFile();
   }
 };

@@ -60,7 +60,7 @@ class TestTool():
 
     def run_tests(self):
         # Simple - test simple function bodies 
-        path_to_proj = self.project_dir / Path("tests/dummy_proj/build")
+        path_to_proj = self.project_dir / Path("tests/dummy_proj")
         function_names = ['func'] + ['func' + str(i) for i in range(2, 10 + 1)]
         self.run_single_test_set(path_to_proj, function_names, "Simple")
         
