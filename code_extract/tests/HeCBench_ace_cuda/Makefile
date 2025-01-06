@@ -48,11 +48,11 @@ endif
 # Targets to Build
 #===============================================================================
 
-$(program): $(obj) Makefile
-	$(CC) $(CFLAGS) $(obj) -o $@ $(LDFLAGS)
+# $(program): $(obj) Makefile
+# 	$(CC) $(CFLAGS) $(obj) -o $@ $(LDFLAGS)
 
-%.o: %.cu reference.h Makefile
-	$(CC) $(CFLAGS) -c $< -o $@
+$(program): $(source) reference.h Makefile
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(program) $(obj)
