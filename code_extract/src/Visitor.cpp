@@ -171,7 +171,8 @@ bool CodeExtractVisitor::VisitRecordDecl(clang::RecordDecl *decl) {
   return true;
 }
 
-/// FIXME: We do not need to cache these as typically defs are together with decls.
+/// FIXME: We do not need to cache these as typically defs are together with
+/// decls.
 bool CodeExtractVisitor::VisitTypedefNameDecl(clang::TypedefNameDecl *decl) {
   auto name = decl->getQualifiedNameAsString();
   if (codedb.isRegistered(name))
@@ -199,16 +200,22 @@ bool MatchVisitor::VisitDeclRefExpr(clang::DeclRefExpr *declRef) {
   // Even if the vardecls are not interesting, visit their type.
   helper::handleVarDecl(declRef->getType(), vm, codedb);
 
-  // Need to filter out cuda internals, for now filter all device objects.
-  if (!helper::isGlobalVar(varDecl) ||
-      varDecl->hasAttr<clang::CUDADeviceAttr>() ||
-      varDecl->hasAttr<clang::BuiltinAttr>())
+  // Need to filter out cuda internals, for now we check if either the variable
+  // name or variable type name is potentially builtin. OR if the variable decl
+  // itself has a builtin attribute.
+  bool isPotentialBuiltin =
+      helper::isPotentialBuiltinByName(varDecl->getNameAsString()) ||
+      helper::isPotentialBuiltinByName(
+          varDecl->getType().getUnqualifiedType().getAsString()) ||
+      varDecl->hasAttr<clang::BuiltinAttr>();
+  if (!helper::isGlobalVar(varDecl) || isPotentialBuiltin)
     return true;
 
   auto [defDecl, visitBody] =
       helper::visitAndRegister<clang::VarDecl>(varDecl, vm, codedb);
   if (!visitBody)
     return true;
+
   assert(
       defDecl->hasDefinition() &&
       "We should have seen this variable's decl before unless it is external!");
