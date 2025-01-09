@@ -5,7 +5,6 @@ project(cuda-example  LANGUAGES C CXX)
 option(ENABLE_CUDA "Enable CUDA" OFF)
 option(ENABLE_HIP "Enable CUDA" OFF)
 
-find_package(RR REQUIRED HINTS "${RR_Dir}")
 
 if(ENABLE_CUDA)
 find_package(CUDAToolkit REQUIRED)
@@ -25,19 +24,8 @@ endif()
 add_executable(vecAdd vec_add.cu)
 
 # Get the full path of the LLVM pass plugin (MyLLVMPass)
-get_target_property(RRPassPath RR::RRPass LOCATION)
 
 set_source_files_properties(vec_add.cu PROPERTIES LANGUAGE ${DEVICE_LANGUAGE})
-
-# Get the full path of the LLVM pass plugin (MyLLVMPass)
-get_target_property(RRPassPath RR::RRPass LOCATION)
-message(STATUS "Record Replay Pass path: ${RRPassPath}")
-
-target_compile_options(
- vecAdd
-      PUBLIC
-      $<$<COMPILE_LANGUAGE:${DEVICE_LANGUAGE}>:-fpass-plugin=${RRPassPath}>
-    ) 
 
 
 
