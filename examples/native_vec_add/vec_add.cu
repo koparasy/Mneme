@@ -16,14 +16,6 @@
 #define CONCATENATE(prefix, call) CONCATENATE_DETAIL(prefix, call)
 #define device_rt_call(call) CONCATENATE(DEVICE_PREFIX, call)
 
-typedef struct {
-  void *addr;
-  double value;
-} dummy;
-
-__device__ int DINOS = 0;
-__device__ dummy val = { nullptr, 1.0};
-__device__ int usr_WS2_koparasy_RecordReplay_examples_native_vec_add_vec_add_cu_1 = 0; 
 template <typename T> __global__ 
 void vecAdd_test(T *in, T *out, size_t size) {
   auto tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -32,13 +24,12 @@ void vecAdd_test(T *in, T *out, size_t size) {
   auto stride = gridDim.x * blockDim.x;
 
   for (; tid < size; tid += stride) {
-    out[tid] += in[tid] + tid + DINOS + val.value;
+    out[tid] += in[tid] + tid;
   }
 }
 
 int main(int argc, const char *argv[]) {
   void *deviceAddress;
-  hipError_t err = hipGetSymbolAddress(&deviceAddress, HIP_SYMBOL(DINOS));
 
   size_t numElements = atoi(argv[1]);
   double *in, *out;
