@@ -405,16 +405,16 @@ private:
 // Overload implementations.
 extern "C" {
 
-// void PREFIX_UU(RegisterFatBinaryEnd)(void *ptr) {
-//   Wrapper *W = Wrapper::instance();
-//   __deviceRegisterFatBinaryEndInternal(ptr);
-//   return;
-// }
-//
-// void **PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
-//   Wrapper *W = Wrapper::instance();
-//   return __deviceRegisterFatBinaryInternal(fatCubin);
-// }
+void PREFIX_UU(RegisterFatBinaryEnd)(void *ptr) {
+  Wrapper *W = Wrapper::instance();
+  __deviceRegisterFatBinaryEndInternal(ptr);
+  return;
+}
+
+void **PREFIX_UU(RegisterFatBinary)(void *fatCubin) {
+  Wrapper *W = Wrapper::instance();
+  return __deviceRegisterFatBinaryInternal(fatCubin);
+}
 
 void PREFIX_UU(RegisterVar)(void **fatCubinHandle, char *hostVar,
                             char *deviceAddress, const char *deviceName,
@@ -634,11 +634,13 @@ PREFIX(LaunchKernel)
 
   return ret;
 }
+}
 
-void __rr_register_fat_binary(void *FatBinary, uint64_t size) {
-  printf("Binary at address %p with size %ld\n", FatBinary, size);
-  Wrapper *W = Wrapper::instance();
-  W->FatBinaries.push_back(std::make_pair(
-      static_cast<CudaRegisterFatBinaryArguments *>(FatBinary), size));
-}
-}
+// USAGE:
+//    1. Legacy PM
+//      opt -enable-new-pm=0 -load libRRPass.dylib -legacy-rr-pass
+//      -disable-output `\`
+//        <input-llvm-file>
+//    2. New PM
+//      opt -load-pass-plugin=libRRPass.dylib -passes="rr-pass" `\`
+//        -disable-output <input-llvm-file>
