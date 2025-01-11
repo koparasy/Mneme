@@ -1,6 +1,6 @@
+#include "MnemeMemoryHIP.hpp"
 #include "MnemeRecord.hpp"
 #include <dlfcn.h>
-#include <hip/hip_runtime.h>
 
 namespace mneme {
 
@@ -9,9 +9,11 @@ template <> struct DeviceTraits<MnemeRecorderHIP> {
   using DeviceError_t = hipError_t;
   using DeviceStream_t = hipStream_t;
   using KernelFunction_t = hipFunction_t;
+  using AllocGranularityFlags = hipMemAllocationGranularity_flags;
 };
 
-class MnemeRecorderHIP : public MnemeRecorder<MnemeRecorderHIP> {
+class MnemeRecorderHIP
+    : public MnemeRecorder<MnemeRecorderHIP, MnemeMemoryBlobHIP> {
 private:
   MnemeRecorderHIP() = default;
 
@@ -34,5 +36,9 @@ public:
   static constexpr bool hasFatBinEnd = false;
 
   static MnemeRecorderHIP &instance();
+
+  void extractIR();
+  MnemeRecorderHIP(MnemeRecorderHIP &) = delete;
+  MnemeRecorderHIP(MnemeRecorderHIP &&) = delete;
 };
 } // namespace mneme
